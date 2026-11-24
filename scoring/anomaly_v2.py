@@ -365,28 +365,28 @@ def compute_energy_stress(energy_df, n_frames, method='sum', top_k=None):
     if energy_df is None or len(energy_df) == 0:
         return np.zeros(n_frames)
     
-    stress = np.zeros(n_frames, dtype=np.float64)
-    
-    for frame in range(n_frames):
-        frame_data = energy_df[energy_df['frame'] == frame]
-        
-        if len(frame_data) == 0:
-            continue
-        
-        energies = frame_data['energy'].values
-        
-        if method == 'sum':
-            stress[frame] = energies.sum()
-        elif method == 'mean':
-            stress[frame] = energies.mean()
-        elif method == 'top_k' and top_k:
-            # Use top-k highest (most unfavorable) energies
-            top_energies = np.sort(energies)[-top_k:]
-            stress[frame] = top_energies.mean()
-        else:
-            stress[frame] = energies.sum()
-    
-    return stress
+    # Single O(rows) pass: group rows by frame once instead of rescanning the
+    # whole table for every frame (which was O(n_frames * rows)).
+    fr = energy_df['frame'].to_numpy()
+    en = energy_df['energy'].to_numpy(dtype=np.float64)
+    ok = (fr >= 0) & (fr < n_frames)
+    fr, en = fr[ok].astype(np.int64), en[ok]
+
+    sums = np.bincount(fr, weights=en, minlength=n_frames)
+    if method == 'mean':
+        cnt = np.bincount(fr, minlength=n_frames)
+        return np.divide(sums, cnt, out=np.zeros(n_frames), where=cnt > 0)
+    if method == 'top_k' and top_k:
+        order = np.lexsort((en, fr))                  # by frame, then energy asc
+        en_s = np.concatenate(([0.0], np.cumsum(en[order])))
+        cnt = np.bincount(fr, minlength=n_frames)
+        end = np.cumsum(cnt)
+        take = np.minimum(cnt, top_k)
+        stress = np.zeros(n_frames, dtype=np.float64)
+        has = take > 0
+        stress[has] = (en_s[end[has]] - en_s[end[has] - take[has]]) / take[has]
+        return stress
+    return sums
 
 
 
@@ -409,19 +409,23 @@ def compute_pocket_volatility(pockets_df, n_frames, lag=1, metric='volume'):
     if pockets_df is None or len(pockets_df) == 0:
         return np.zeros(n_frames)
     
-    # Aggregate metric per frame (sum over all pockets)
-    frame_metric = np.zeros(n_frames, dtype=np.float64)
-    
-    for frame in range(n_frames):
-        frame_data = pockets_df[pockets_df['frame'] == frame]
-        if len(frame_data) > 0:
-            frame_metric[frame] = frame_data[metric].sum()
-    
-    # Compute absolute changes
+    # Aggregate metric per frame (sum over all pockets) in one pass
+    fr = pockets_df['frame'].to_numpy()
+    ok = (fr >= 0) & (fr < n_frames)
+    frame_metric = np.bincount(
+        fr[ok].astype(np.int64),
+        weights=pockets_df[metric].to_numpy(dtype=np.float64)[ok],
+        minlength=n_frames,
+    ).astype(np.float64)
+
+    # Absolute changes at the given lag (vectorised; lag < 1 keeps old behaviour)
     volatility = np.zeros(n_frames, dtype=np.float64)
-    for t in range(lag, n_frames):
-        volatility[t] = np.abs(frame_metric[t] - frame_metric[t - lag])
-    
+    if lag >= 1:
+        volatility[lag:] = np.abs(frame_metric[lag:] - frame_metric[:-lag])
+    else:
+        for t in range(lag, n_frames):
+            volatility[t] = np.abs(frame_metric[t] - frame_metric[t - lag])
+
     return volatility
 
 

@@ -38,6 +38,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,42 @@ log = logging.getLogger(__name__)
 # Accepted trajectory file names (searched in order)
 # ---------------------------------------------------------------------------
 TRAJ_NAMES = ("traj.xtc", "traj.dcd", "trajectory.xtc", "trajectory.dcd")
+
+
+# ---------------------------------------------------------------------------
+# Per-stage timing
+# ---------------------------------------------------------------------------
+class StageTimer:
+    """Accumulates wall time per named stage and logs a table at the end.
+
+    `start(name)` closes the previous stage and opens `name`, so stages are
+    delimited by marker calls and the pipeline body needs no re-indenting.
+    """
+
+    def __init__(self):
+        self.t0 = time.perf_counter()
+        self._name = None
+        self._ts = self.t0
+        self.stages = []                     # [(name, seconds)]
+
+    def start(self, name):
+        now = time.perf_counter()
+        if self._name is not None:
+            self.stages.append((self._name, now - self._ts))
+        self._name, self._ts = name, now
+
+    def finish(self):
+        self.start(None)
+        self.stages = [(n, t) for n, t in self.stages if n is not None]
+        return self.stages
+
+    def log_table(self, pdb_id):
+        stages = self.finish()
+        total = time.perf_counter() - self.t0
+        log.info("[%s] Stage timings (total %.2fs):", pdb_id, total)
+        for name, sec in sorted(stages, key=lambda x: -x[1]):
+            log.info("[%s]   %-22s %7.2fs  %5.1f%%", pdb_id, name, sec,
+                     100 * sec / total if total > 0 else 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +154,7 @@ def find_protein_dirs(data_dir):
 # -------------------------------------------------------------- #
 # Function: compute_features
 # -------------------------------------------------------------- #
-def compute_features(topology_path, trajectory_path, stride=1):
+def compute_features(topology_path, trajectory_path, stride=1, cache_path=None):
     """
     Step 1 — Extract MD features from a trajectory.
 
@@ -137,7 +174,8 @@ def compute_features(topology_path, trajectory_path, stride=1):
         features_to_matrix,
     )
 
-    feats, traj = _compute_features(str(topology_path), str(trajectory_path), stride=stride)
+    feats, traj = _compute_features(str(topology_path), str(trajectory_path),
+                                    stride=stride, cache_path=cache_path)
     X, _ = features_to_matrix(feats)
     return X, traj
 
@@ -422,7 +460,7 @@ def compute_rmsf_residue_json(traj):
 # -------------------------------------------------------------- #
 # Function: run_pipeline
 # -------------------------------------------------------------- #
-def run_pipeline(
+def _run_pipeline_impl(
     pdb_id,
     topology_path,
     trajectory_path,
@@ -436,6 +474,8 @@ def run_pipeline(
     k_neighbors=10,
     window=1,
     seed=42,
+    cache_features=False,
+    T=None,
 ):
     """
     Run the complete ML pipeline for a single protein.
@@ -458,18 +498,23 @@ def run_pipeline(
     Returns:
         True on success, False on failure.
     """
+    T = T or StageTimer()
     art_dir = Path(artifacts_dir) / pdb_id
     res_dir = Path(results_dir) / pdb_id
     art_dir.mkdir(parents=True, exist_ok=True)
     res_dir.mkdir(parents=True, exist_ok=True)
 
+    T.start("1 features")
     log.info("[%s] ── Step 1/5: Feature extraction", pdb_id)
     try:
-        X, traj = compute_features(topology_path, trajectory_path, stride=stride)
+        X, traj = compute_features(
+            topology_path, trajectory_path, stride=stride,
+            cache_path=(art_dir / "features_cache.npz") if cache_features else None)
     except Exception as exc:
         log.error("[%s] Feature extraction failed: %s", pdb_id, exc)
         return False
 
+    T.start("1b preflight")
     # --- D-10: discard equilibration frames before anything is scored ---
     # Startup relaxation from the deposited structure is not a rare event. An
     # external audit found frames 1-3 of ubiquitin scoring 99.7/100 purely from
@@ -514,6 +559,7 @@ def run_pipeline(
         log.warning("[%s] Too few frames (%d) — skipping.", pdb_id, n_frames)
         return False
 
+    T.start("2 tICA")
     log.info("[%s] ── Step 2/5: tICA (lag=%d, dim=%d)", pdb_id, lag_tica, dim_tica)
     try:
         Y, _ = run_tica(X, lag=lag_tica, dim=dim_tica)
@@ -524,6 +570,7 @@ def run_pipeline(
     np.save(art_dir / "tica_coords.npy", Y)
     log.info("[%s]   tICA shape: %s", pdb_id, Y.shape)
 
+    T.start("3 clustering")
     log.info("[%s] ── Step 3/5: Clustering (n_clusters=%d)", pdb_id, n_clusters)
     try:
         dtraj, _ = cluster_states(Y, n_clusters=n_clusters, seed=seed)
@@ -534,6 +581,7 @@ def run_pipeline(
     np.save(art_dir / "dtraj.npy", dtraj)
     log.info("[%s]   Unique states: %d", pdb_id, len(np.unique(dtraj)))
 
+    T.start("4 MSM")
     log.info("[%s] ── Step 4/5: MSM (lag=%d)", pdb_id, lag_msm)
     try:
         msm, P, pi = build_msm(dtraj, lag=lag_msm)
@@ -567,6 +615,7 @@ def run_pipeline(
         except Exception:
             pass
 
+    T.start("5 anomaly scoring")
     log.info("[%s] ── Step 5/5: Anomaly scoring", pdb_id)
     try:
         frame_scores, components = compute_anomaly_signals(
@@ -576,6 +625,7 @@ def run_pipeline(
         log.error("[%s] Anomaly scoring failed: %s", pdb_id, exc)
         return False
 
+    T.start("6 trust contract")
     # --- OI-34: enforce the trust contract BEFORE anything is written ------
     # CLAIMS.md says pi-derived quantities are meaningless without repeat
     # visits. Until 2026-08-31 the pipeline emitted them anyway. It no longer
@@ -609,6 +659,7 @@ def run_pipeline(
                   "ungated scores", pdb_id, exc)
         return False
 
+    T.start("7 write frame scores")
     # --- Save frame scores ---
     import pandas as pd
 
@@ -629,6 +680,7 @@ def run_pipeline(
     scores_df.to_csv(frame_csv, index=False)
     log.info("[%s]   Frame scores → %s", pdb_id, frame_csv)
 
+    T.start("8 residue scores")
     # --- Save residue scores ---
     residue_scores = compute_residue_scores(traj, frame_scores)
     residue_json = res_dir / "residue_scores_dynamic.json"
@@ -636,6 +688,7 @@ def run_pipeline(
         json.dump(residue_scores, fh, indent=2)
     log.info("[%s]   Residue scores → %s", pdb_id, residue_json)
 
+    T.start("9 residue attribution")
     # --- E-1 FIX: RMSF-orthogonal attribution (the reported residue score) ---
     try:
         from scoring.residue_attribution import compute_residue_attribution
@@ -654,6 +707,7 @@ def run_pipeline(
     except Exception as exc:
         log.warning("[%s]   Kinetic residue attribution failed: %s", pdb_id, exc)
 
+    T.start("10 write misc")
     # --- Save preflight record ---
     try:
         with open(res_dir / "preflight.json", "w") as fh:
@@ -662,6 +716,7 @@ def run_pipeline(
         pass
 
     # --- Save RMSF residue scores (consumed by tools/export_for_asvs.py) ---
+    T.start("11 rmsf")
     rmsf_scores = compute_rmsf_residue_json(traj)
     if rmsf_scores:
         with open(res_dir / "residue_scores_rmsf.json", "w") as fh:
@@ -678,6 +733,21 @@ def run_pipeline(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+
+def run_pipeline(pdb_id, *args, **kwargs):
+    """Run the pipeline for one protein and log a per-stage timing table.
+
+    Thin wrapper over `_run_pipeline_impl` (same arguments, same return value).
+    """
+    T = StageTimer()
+    try:
+        return _run_pipeline_impl(pdb_id, *args, T=T, **kwargs)
+    finally:
+        try:
+            T.log_table(pdb_id)
+        except Exception:                               # timing must never break a run
+            pass
 
 
 # -------------------------------------------------------------- #
@@ -730,6 +800,18 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
+        "--cache_features", action="store_true",
+        help="Reuse extracted features from artifacts/{PDB_ID}/features_cache.npz when the "
+             "topology, trajectory and stride are unchanged (saves the feature pass when "
+             "re-running with different tICA/MSM settings). Off by default.",
+    )
+    parser.add_argument(
+        "--jobs", type=int, default=1,
+        help="Proteins to process in parallel (separate processes). 1 = sequential "
+             "(default). Proteins are independent, so results are identical; "
+             "memory use scales with jobs because each holds its trajectory.",
+    )
+    parser.add_argument(
         "--protein",
         default=None,
         help="Process only this PDB ID (useful for debugging)",
@@ -762,16 +844,8 @@ def main():
     n_fail = 0
     failed_ids = []
 
-    for i, (pdb_id, topology, trajectory) in enumerate(datasets, 1):
-        log.info("")
-        log.info("─" * 60)
-        log.info("[%d/%d] Processing: %s", i, len(datasets), pdb_id)
-        log.info("─" * 60)
-
-        ok = run_pipeline(
-            pdb_id=pdb_id,
-            topology_path=topology,
-            trajectory_path=trajectory,
+    def _kwargs():
+        return dict(
             artifacts_dir=args.artifacts_dir,
             results_dir=args.results_dir,
             stride=args.stride,
@@ -782,13 +856,64 @@ def main():
             k_neighbors=args.k_neighbors,
             window=args.window,
             seed=args.seed,
+            cache_features=args.cache_features,
         )
 
-        if ok:
-            n_ok += 1
-        else:
-            n_fail += 1
-            failed_ids.append(pdb_id)
+    if args.jobs > 1 and len(datasets) > 1:
+        # Proteins share nothing, so run them in separate processes. Results are
+        # collected in input order, so the summary below is deterministic.
+        from concurrent.futures import ProcessPoolExecutor
+
+        n_workers = min(args.jobs, len(datasets))
+        log.info("Running %d proteins with %d parallel worker(s).",
+                 len(datasets), n_workers)
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futures = [
+                (pdb_id, pool.submit(run_pipeline, pdb_id=pdb_id,
+                                     topology_path=topology,
+                                     trajectory_path=trajectory, **_kwargs()))
+                for pdb_id, topology, trajectory in datasets
+            ]
+            for pdb_id, fut in futures:
+                try:
+                    ok = fut.result()
+                except Exception as exc:                 # a crashed worker must not hide the rest
+                    log.error("[%s] worker crashed: %s", pdb_id, exc)
+                    ok = False
+                if ok:
+                    n_ok += 1
+                else:
+                    n_fail += 1
+                    failed_ids.append(pdb_id)
+    else:
+        for i, (pdb_id, topology, trajectory) in enumerate(datasets, 1):
+            log.info("")
+            log.info("─" * 60)
+            log.info("[%d/%d] Processing: %s", i, len(datasets), pdb_id)
+            log.info("─" * 60)
+
+            ok = run_pipeline(
+                pdb_id=pdb_id,
+                topology_path=topology,
+                trajectory_path=trajectory,
+                artifacts_dir=args.artifacts_dir,
+                results_dir=args.results_dir,
+                stride=args.stride,
+                lag_tica=args.lag_tica,
+                dim_tica=args.dim_tica,
+                n_clusters=args.n_clusters,
+                lag_msm=args.lag_msm,
+                k_neighbors=args.k_neighbors,
+                window=args.window,
+                seed=args.seed,
+                cache_features=args.cache_features,
+            )
+
+            if ok:
+                n_ok += 1
+            else:
+                n_fail += 1
+                failed_ids.append(pdb_id)
 
     log.info("")
     log.info("=" * 60)

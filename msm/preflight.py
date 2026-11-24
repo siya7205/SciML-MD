@@ -113,12 +113,12 @@ def assess_suitability(traj, rmsd_cluster_cutoff_ang=2.0):
     import mdtraj as md
 
     ca = traj.topology.select("name CA")
-    ct = traj.atom_slice(ca).superpose(traj.atom_slice(ca))
+    ct = traj.atom_slice(ca)          # superposed AFTER subsampling (per-frame, exact)
     n = len(ct)
     n_res = len(ca)
 
     step = max(1, n // 200)                                 # cap the O(n^2) work
-    sub = ct[::step]
+    sub = ct[::step].superpose(ct)    # same frame-0 reference as before
     m = len(sub)
     R = np.zeros((m, m))
     for i in range(m):
@@ -143,17 +143,22 @@ def assess_suitability(traj, rmsd_cluster_cutoff_ang=2.0):
     # basin yields one holding nearly everything; a diffusive chain yields many
     # clusters none of which holds anything. Order dependence is accepted here -
     # this is an advisory screen, not an estimator.
-    leaders, assign = [], np.empty(m, dtype=np.int64)
+    # Same first-match leader assignment as before, with the inner scan over
+    # leaders vectorised (identical output; ~30x faster when clusters are many).
+    leaders_buf = np.empty(m, dtype=np.int64)
+    n_lead = 0
+    assign = np.empty(m, dtype=np.int64)
     for i in range(m):
-        placed = False
-        for c, lead in enumerate(leaders):
-            if R[i, lead] < rmsd_cluster_cutoff_ang:
+        if n_lead:
+            hit = R[i, leaders_buf[:n_lead]] < rmsd_cluster_cutoff_ang
+            c = int(hit.argmax())
+            if hit[c]:
                 assign[i] = c
-                placed = True
-                break
-        if not placed:
-            leaders.append(i)
-            assign[i] = len(leaders) - 1
+                continue
+        leaders_buf[n_lead] = i
+        assign[i] = n_lead
+        n_lead += 1
+    leaders = leaders_buf[:n_lead]
     occ = np.bincount(assign, minlength=len(leaders)) / m
     occ_sorted = np.sort(occ)[::-1]
     n_basins = int(len(leaders))
@@ -301,7 +306,7 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
     # was ever letting one number answer both. Both are now reported, each
     # labelled with the question it answers.
     sel = traj.topology.select(selection)
-    ct = traj.atom_slice(sel).superpose(traj.atom_slice(sel))
+    ct = traj.atom_slice(sel)         # superposed AFTER subsampling (per-frame, exact)
     n_full = len(ct)
 
     # physical stride, from the trajectory's own clock where available
@@ -312,7 +317,7 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
             stride_ns = dt / 1000.0                      # mdtraj time is in ps
 
     step = max(1, n_full // max_frames)
-    sub = ct[::step]
+    sub = ct[::step].superpose(ct)    # same frame-0 reference as before
     m = len(sub)
     eff_stride = stride_ns * step if stride_ns else None
 
@@ -360,7 +365,8 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
     for alt in (also or ()):
         try:
             asel = traj.topology.select(alt)
-            at = traj.atom_slice(asel).superpose(traj.atom_slice(asel))[::step]
+            a_full = traj.atom_slice(asel)
+            at = a_full[::step].superpose(a_full)
             am = len(at)
             if am <= gap + 2:
                 continue

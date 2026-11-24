@@ -131,31 +131,65 @@ def compute_mfpts(msm):
         mfpt_matrix: Matrix of MFPTs (n_states x n_states)
     """
     n_states = msm.n_states
-    P = msm.transition_matrix
-    
-    # Compute MFPT using standard formula
+    P = np.asarray(msm.transition_matrix, dtype=float)
+
+    # Mean first-passage time i -> j, in MSM lag steps, from the fundamental
+    # matrix Z = (I - P + 1 pi^T)^-1:   M[i, j] = (Z[j, j] - Z[i, j]) / pi[j].
+    # One O(S^3) inverse for the whole matrix. The previous implementation took
+    # an entry of a different inverse per (i, j) pair - O(S^5) - and returned
+    # NEGATIVE values (it is not a first-passage time).
     mfpts = np.zeros((n_states, n_states))
-    
-    for i in range(n_states):
+    try:
+        pi = np.asarray(msm.stationary_distribution, dtype=float)
+        Z = np.linalg.inv(np.eye(n_states) - P + np.outer(np.ones(n_states), pi))
+        mfpts = (np.diag(Z)[None, :] - Z) / pi[None, :]
+        np.fill_diagonal(mfpts, 0.0)
+        if not np.all(np.isfinite(mfpts)):
+            raise np.linalg.LinAlgError("non-finite MFPT")
+    except Exception:
+        # Fall back to one linear solve per target state: (I - Q_j) m = 1.
+        mfpts = np.zeros((n_states, n_states))
         for j in range(n_states):
-            if i == j:
-                mfpts[i, j] = 0
-            else:
-                # MFPT from i to j
-                # Use iterative method for numerical stability
-                try:
-                    # Fundamental matrix approach
-                    Q = P.copy()
-                    Q[:, j] = 0  # Remove target state
-                    Q[j, j] = 1  # Absorbing state
-                    
-                    I = np.eye(n_states)
-                    N = np.linalg.inv(I - Q + np.outer(np.ones(n_states), Q[j, :]))
-                    mfpts[i, j] = N[i, j]
-                except:
-                    mfpts[i, j] = np.inf
-    
+            idx = np.array([k for k in range(n_states) if k != j])
+            try:
+                m = np.linalg.solve(np.eye(n_states - 1) - P[np.ix_(idx, idx)],
+                                    np.ones(n_states - 1))
+                mfpts[idx, j] = m
+            except np.linalg.LinAlgError:
+                mfpts[idx, j] = np.inf
+
     return mfpts
+
+
+
+# -------------------------------------------------------------- #
+# Function: _bootstrap_once
+# -------------------------------------------------------------- #
+def _bootstrap_once(i, X, method, block_size, seed, lag_tica, dim_tica,
+                    n_clusters, lag_msm, seed_kmeans, n_states):
+    """One bootstrap replicate. Independent of every other replicate (own seed),
+    so replicates can run in any order or in parallel with identical results.
+
+    Returns (pi, P, mfpt) padded to the reference size, None if the replicate
+    has no states, or an Exception instance if it failed.
+    """
+    try:
+        X_boot = bootstrap_resample(X, method=method, block_size=block_size,
+                                    seed=seed + i)
+        msm_boot, _ = fit_msm_pipeline(X_boot, lag_tica, dim_tica,
+                                       n_clusters, lag_msm, seed_kmeans)
+        n_boot = msm_boot.n_states
+        if n_boot <= 0:
+            return None
+        pi_boot = np.zeros(n_states)
+        pi_boot[:n_boot] = msm_boot.stationary_distribution
+        P_boot = np.zeros((n_states, n_states))
+        P_boot[:n_boot, :n_boot] = msm_boot.transition_matrix
+        mfpt_padded = np.full((n_states, n_states), np.nan)
+        mfpt_padded[:n_boot, :n_boot] = compute_mfpts(msm_boot)
+        return pi_boot, P_boot, mfpt_padded
+    except Exception as e:                      # reported by the caller
+        return e
 
 
 
@@ -163,7 +197,7 @@ def compute_mfpts(msm):
 # Function: bootstrap_msm
 # -------------------------------------------------------------- #
 def bootstrap_msm(features_path, output_dir, config_path=None, 
-                  lag_tica=None, dim_tica=None):
+                  lag_tica=None, dim_tica=None, n_jobs=1):
     """
     Perform bootstrap MSM analysis with confidence intervals.
     
@@ -173,6 +207,7 @@ def bootstrap_msm(features_path, output_dir, config_path=None,
         config_path: Path to config YAML
         lag_tica: TICA lag (uses config or best from selection if None)
         dim_tica: TICA dim (uses config or best from selection if None)
+        n_jobs: parallel bootstrap workers (1 = serial; replicates are independent)
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -228,40 +263,26 @@ def bootstrap_msm(features_path, output_dir, config_path=None,
     P_samples = []
     mfpt_samples = []
     
-    for i in range(n_bootstrap):
-        if (i + 1) % 10 == 0:
-            print(f"  Iteration {i+1}/{n_bootstrap}")
-        
-        # Resample
-        X_boot = bootstrap_resample(X, method=method, block_size=block_size, 
-                                    seed=seed + i)
-        
-        try:
-            # Fit MSM
-            msm_boot, _ = fit_msm_pipeline(X_boot, lag_tica, dim_tica, 
-                                          n_clusters, lag_msm, seed_kmeans)
-            
-            # Store results (pad to reference size if needed)
-            n_states_boot = msm_boot.n_states
-            
-            if n_states_boot > 0:
-                pi_boot = np.zeros(n_states)
-                pi_boot[:n_states_boot] = msm_boot.stationary_distribution
-                pi_samples.append(pi_boot)
-                
-                P_boot = np.zeros((n_states, n_states))
-                P_boot[:n_states_boot, :n_states_boot] = msm_boot.transition_matrix
-                P_samples.append(P_boot)
-                
-                # Compute MFPTs
-                mfpt_boot = compute_mfpts(msm_boot)
-                mfpt_padded = np.full((n_states, n_states), np.nan)
-                mfpt_padded[:n_states_boot, :n_states_boot] = mfpt_boot
-                mfpt_samples.append(mfpt_padded)
-        
-        except Exception as e:
-            print(f"    Warning: Bootstrap {i} failed: {e}")
-            continue
+    args_common = (X, method, block_size, seed, lag_tica, dim_tica,
+                   n_clusters, lag_msm, seed_kmeans, n_states)
+    if n_jobs is not None and n_jobs != 1:
+        from joblib import Parallel, delayed
+        outcomes = Parallel(n_jobs=n_jobs)(
+            delayed(_bootstrap_once)(i, *args_common) for i in range(n_bootstrap))
+    else:
+        outcomes = []
+        for i in range(n_bootstrap):
+            if (i + 1) % 10 == 0:
+                print(f"  Iteration {i+1}/{n_bootstrap}")
+            outcomes.append(_bootstrap_once(i, *args_common))
+
+    for i, out in enumerate(outcomes):            # input order -> deterministic
+        if isinstance(out, Exception):
+            print(f"    Warning: Bootstrap {i} failed: {out}")
+        elif out is not None:
+            pi_samples.append(out[0])
+            P_samples.append(out[1])
+            mfpt_samples.append(out[2])
     
     print(f"  Successful bootstraps: {len(pi_samples)}/{n_bootstrap}")
     
@@ -366,11 +387,13 @@ def main():
                        help='TICA lag time (uses VAMP-2 selection if not provided)')
     parser.add_argument('--dim_tica', type=int, default=None,
                        help='TICA dimensions (uses VAMP-2 selection if not provided)')
+    parser.add_argument('--n_jobs', type=int, default=1,
+                       help='Parallel bootstrap workers (1 = serial; -1 = all cores)')
     
     args = parser.parse_args()
     
     bootstrap_msm(args.features, args.output_dir, args.config,
-                 args.lag_tica, args.dim_tica)
+                 args.lag_tica, args.dim_tica, n_jobs=args.n_jobs)
 
 
 if __name__ == '__main__':

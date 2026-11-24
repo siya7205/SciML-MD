@@ -94,7 +94,8 @@ def split_ensembles(frame_scores, percentile=85.0):
 # -------------------------------------------------------------- #
 # Function: contact_flux
 # -------------------------------------------------------------- #
-def contact_flux(ca_xyz, anom_mask, base_mask, cutoff_nm=0.8, chunk=200):
+def contact_flux(ca_xyz, anom_mask, base_mask, cutoff_nm=0.8, chunk=200,
+                 n_threads=None):
     """Anomaly-conditioned contact flux, streamed to bound memory.
 
     S_contact(r) = sum_j |<C_rj>_anom - <C_rj>_base|
@@ -107,31 +108,66 @@ def contact_flux(ca_xyz, anom_mask, base_mask, cutoff_nm=0.8, chunk=200):
         anom_mask / base_mask: boolean frame masks.
         cutoff_nm: contact distance threshold (0.8 nm = 8 A, matching the
             pipeline's native-contact feature).
-        chunk: frames processed per batch; memory is O(chunk * n_res^2).
+        chunk: frames processed per batch; memory is O(chunk * contacts) plus
+               two (n_res^2) accumulators.
 
     Returns:
         (n_res,) contact flux per residue.
     """
     n_frames, n_res, _ = ca_xyz.shape
-    acc_a = np.zeros((n_res, n_res), dtype=np.float64)
-    acc_b = np.zeros((n_res, n_res), dtype=np.float64)
-    n_a = n_b = 0
+    # Contacts within 8 A are sparse (each residue has O(1) neighbours), so a
+    # KD-tree finds them in O(n_res) per frame. The previous dense version
+    # built a (chunk, n_res, n_res, 3) array: ~48 GB at chunk=200 for a
+    # 3,172-residue protein, and O(n_res^2) work per frame.
+    from scipy.spatial import cKDTree
 
-    for start in range(0, n_frames, chunk):
-        stop = min(start + chunk, n_frames)
-        block = ca_xyz[start:stop]                      # (c, n_res, 3)
-        d = np.linalg.norm(block[:, :, None, :] - block[:, None, :, :], axis=-1)
-        c = (d < cutoff_nm).astype(np.float64)
-        ma = anom_mask[start:stop]
-        mb = base_mask[start:stop]
-        if ma.any():
-            acc_a += c[ma].sum(axis=0); n_a += int(ma.sum())
-        if mb.any():
-            acc_b += c[mb].sum(axis=0); n_b += int(mb.sum())
+    acc_a = np.zeros(n_res * n_res, dtype=np.float64)
+    acc_b = np.zeros(n_res * n_res, dtype=np.float64)
+    n_a = n_b = 0
+    idx_dtype = np.int32 if n_res * n_res < 2**31 else np.int64
+
+    def _frame_flat(f):
+        """Flat (i*n_res+j) indices of every contact in frame f, both directions."""
+        xyz = ca_xyz[f]
+        pairs = cKDTree(xyz).query_pairs(cutoff_nm, output_type="ndarray")
+        # strict "<" to match the dense definition (query_pairs is "<=")
+        keep = np.linalg.norm(xyz[pairs[:, 0]] - xyz[pairs[:, 1]], axis=1) < cutoff_nm
+        pairs = pairs[keep].astype(np.int64)
+        return np.concatenate((pairs[:, 0] * n_res + pairs[:, 1],
+                               pairs[:, 1] * n_res + pairs[:, 0])).astype(idx_dtype)
+
+    # Frames are independent and the KD-tree work releases the GIL, so the
+    # per-frame contact search runs on threads (identical result, any order).
+    if n_threads is None:
+        import os
+        n_threads = min(8, os.cpu_count() or 1)
+    ex = None
+    if n_threads > 1 and n_frames >= 32 and n_res >= 500:
+        from concurrent.futures import ThreadPoolExecutor
+        ex = ThreadPoolExecutor(max_workers=n_threads)
+    try:
+        for start in range(0, n_frames, chunk):
+            stop = min(start + chunk, n_frames)
+            frames = [f for f in range(start, stop)
+                      if bool(anom_mask[f]) or bool(base_mask[f])]
+            flats = list(ex.map(_frame_flat, frames)) if ex else [_frame_flat(f) for f in frames]
+            idx_a, idx_b = [], []
+            for f, flat in zip(frames, flats):
+                if bool(anom_mask[f]):
+                    idx_a.append(flat); n_a += 1
+                if bool(base_mask[f]):
+                    idx_b.append(flat); n_b += 1
+            if idx_a:
+                acc_a += np.bincount(np.concatenate(idx_a), minlength=n_res * n_res)
+            if idx_b:
+                acc_b += np.bincount(np.concatenate(idx_b), minlength=n_res * n_res)
+    finally:
+        if ex:
+            ex.shutdown()
 
     if n_a == 0 or n_b == 0:
         raise ValueError("One ensemble is empty after masking")
-    delta = np.abs(acc_a / n_a - acc_b / n_b)
+    delta = np.abs(acc_a / n_a - acc_b / n_b).reshape(n_res, n_res)
     np.fill_diagonal(delta, 0.0)
     return delta.sum(axis=1)
 
