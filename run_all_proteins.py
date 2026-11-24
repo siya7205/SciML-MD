@@ -154,7 +154,7 @@ def find_protein_dirs(data_dir):
 # -------------------------------------------------------------- #
 # Function: compute_features
 # -------------------------------------------------------------- #
-def compute_features(topology_path, trajectory_path, stride=1, cache_path=None):
+def compute_features(topology_path, trajectory_path, stride=1):
     """
     Step 1 — Extract MD features from a trajectory.
 
@@ -174,8 +174,7 @@ def compute_features(topology_path, trajectory_path, stride=1, cache_path=None):
         features_to_matrix,
     )
 
-    feats, traj = _compute_features(str(topology_path), str(trajectory_path),
-                                    stride=stride, cache_path=cache_path)
+    feats, traj = _compute_features(str(topology_path), str(trajectory_path), stride=stride)
     X, _ = features_to_matrix(feats)
     return X, traj
 
@@ -474,7 +473,6 @@ def _run_pipeline_impl(
     k_neighbors=10,
     window=1,
     seed=42,
-    cache_features=False,
     T=None,
 ):
     """
@@ -507,9 +505,7 @@ def _run_pipeline_impl(
     T.start("1 features")
     log.info("[%s] ── Step 1/5: Feature extraction", pdb_id)
     try:
-        X, traj = compute_features(
-            topology_path, trajectory_path, stride=stride,
-            cache_path=(art_dir / "features_cache.npz") if cache_features else None)
+        X, traj = compute_features(topology_path, trajectory_path, stride=stride)
     except Exception as exc:
         log.error("[%s] Feature extraction failed: %s", pdb_id, exc)
         return False
@@ -735,6 +731,19 @@ def _run_pipeline_impl(
 # ---------------------------------------------------------------------------
 
 
+def _run_pipeline_worker(max_threads, **kwargs):
+    """Process-pool entry point: cap this worker's neighbour-search threads.
+
+    Only the pipeline's own KD-tree threads are capped (SCIML_MAX_THREADS). Their
+    count cannot change results. BLAS / OpenMP thread counts are deliberately
+    left alone, because changing them can change floating-point reduction order;
+    set OMP_NUM_THREADS yourself if you need to limit those.
+    """
+    import os
+    os.environ["SCIML_MAX_THREADS"] = str(max(1, int(max_threads)))
+    return run_pipeline(**kwargs)
+
+
 def run_pipeline(pdb_id, *args, **kwargs):
     """Run the pipeline for one protein and log a per-stage timing table.
 
@@ -800,12 +809,6 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
-        "--cache_features", action="store_true",
-        help="Reuse extracted features from artifacts/{PDB_ID}/features_cache.npz when the "
-             "topology, trajectory and stride are unchanged (saves the feature pass when "
-             "re-running with different tICA/MSM settings). Off by default.",
-    )
-    parser.add_argument(
         "--jobs", type=int, default=1,
         help="Proteins to process in parallel (separate processes). 1 = sequential "
              "(default). Proteins are independent, so results are identical; "
@@ -856,7 +859,6 @@ def main():
             k_neighbors=args.k_neighbors,
             window=args.window,
             seed=args.seed,
-            cache_features=args.cache_features,
         )
 
     if args.jobs > 1 and len(datasets) > 1:
@@ -864,12 +866,16 @@ def main():
         # collected in input order, so the summary below is deterministic.
         from concurrent.futures import ProcessPoolExecutor
 
+        import os
         n_workers = min(args.jobs, len(datasets))
-        log.info("Running %d proteins with %d parallel worker(s).",
-                 len(datasets), n_workers)
+        threads_per_worker = max(1, (os.cpu_count() or 1) // n_workers)
+        log.info("Running %d proteins with %d parallel worker(s), up to %d "
+                 "neighbour-search thread(s) each.", len(datasets), n_workers,
+                 threads_per_worker)
         with ProcessPoolExecutor(max_workers=n_workers) as pool:
             futures = [
-                (pdb_id, pool.submit(run_pipeline, pdb_id=pdb_id,
+                (pdb_id, pool.submit(_run_pipeline_worker, threads_per_worker,
+                                     pdb_id=pdb_id,
                                      topology_path=topology,
                                      trajectory_path=trajectory, **_kwargs()))
                 for pdb_id, topology, trajectory in datasets
@@ -906,7 +912,6 @@ def main():
                 k_neighbors=args.k_neighbors,
                 window=args.window,
                 seed=args.seed,
-                cache_features=args.cache_features,
             )
 
             if ok:

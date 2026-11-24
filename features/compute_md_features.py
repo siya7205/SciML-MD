@@ -21,55 +21,9 @@ import mdtraj as md
 
 
 # -------------------------------------------------------------- #
-# Feature cache helpers
-# -------------------------------------------------------------- #
-# Bump when ANY feature definition changes, so stale caches are never reused.
-FEATURE_CODE_VERSION = "1"
-
-
-def _file_sig(path):
-    import os
-    st = os.stat(path)
-    return f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime_ns}"
-
-
-def _cache_key(topology_path, trajectory_path, stride, reference_frame, n_frames):
-    import hashlib
-    raw = "||".join([FEATURE_CODE_VERSION, _file_sig(topology_path),
-                     _file_sig(trajectory_path), str(stride),
-                     str(reference_frame), str(n_frames)])
-    return hashlib.sha256(raw.encode()).hexdigest()
-
-
-def _load_feature_cache(cache_path, key):
-    import os
-    if not os.path.exists(cache_path):
-        return None
-    try:
-        with np.load(cache_path, allow_pickle=False) as z:
-            if str(z["__key__"]) != key:
-                return None
-            return {k: z[k] for k in z.files if k != "__key__"}
-    except Exception:                                   # corrupt cache -> recompute
-        return None
-
-
-def _save_feature_cache(cache_path, key, features):
-    import os
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
-        tmp = str(cache_path) + ".tmp.npz"
-        np.savez(tmp, __key__=np.array(key), **features)
-        os.replace(tmp, cache_path)                    # atomic: no half-written cache
-    except Exception:
-        pass                                            # caching must never break a run
-
-
-# -------------------------------------------------------------- #
 # Function: compute_features
 # -------------------------------------------------------------- #
-def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0,
-                     cache_path=None):
+def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0):
     """
     Compute MD features from a trajectory.
     
@@ -78,10 +32,6 @@ def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0
         trajectory_path: Path to trajectory file (XTC, DCD, etc.)
         stride: Load every stride-th frame
         reference_frame: Frame index for RMSD reference
-        cache_path: Optional .npz path. If given and it holds features computed from
-            the SAME files/stride/code version, they are reused instead of
-            recomputed (the trajectory is still loaded, since callers need it).
-            Otherwise features are computed and written there.
         
     Returns:
         features: Dictionary of feature arrays
@@ -110,20 +60,7 @@ def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0
         )
 
     n_frames = len(traj)
-
-    cache_key = None
-    if cache_path is not None:
-        cache_key = _cache_key(topology_path, trajectory_path, stride,
-                               reference_frame, n_frames)
-        cached = _load_feature_cache(cache_path, cache_key)
-        if cached is not None:
-            # md.rmsd centres traj.xyz IN PLACE, and the preflight / residue
-            # scoring downstream read those centred coordinates. Reproduce that
-            # side effect (cheap: one RMSD pass) so a cache hit is bit-identical
-            # to a fresh computation.
-            md.rmsd(traj, traj[reference_frame])
-            return cached, traj
-
+    
     features = {}
     
     # 1. RMSD from reference frame
@@ -165,79 +102,113 @@ def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0
         features['psi_sin'] = np.zeros(n_frames)
         features['psi_cos'] = np.zeros(n_frames)
     
-    if cache_path is not None:
-        _save_feature_cache(cache_path, cache_key, features)
-
     return features, traj
 
 
 
 # -------------------------------------------------------------- #
+# Function: _max_threads
+# -------------------------------------------------------------- #
+def _max_threads():
+    """Thread budget for per-frame neighbour searches.
+
+    SCIML_MAX_THREADS (set per worker by run_all_proteins --jobs) caps it, so
+    parallel proteins do not oversubscribe the CPU. Thread count never changes
+    results here: each frame is computed independently and written to its own slot.
+    """
+    import os
+    env = os.environ.get("SCIML_MAX_THREADS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    return max(1, min(8, os.cpu_count() or 1))
+
+
+# -------------------------------------------------------------- #
 # Function: _count_ca_contacts
 # -------------------------------------------------------------- #
-def _count_ca_contacts(traj, ca_atoms, cutoff_nm=0.8, max_chunk_bytes=256e6,
+def _count_ca_contacts(traj, ca_atoms, cutoff_nm=0.8, chunk=64,
+                       search_margin_nm=1e-3, max_chunk_bytes=256e6,
                        n_threads=None):
-    """Per-frame number of CA-CA pairs closer than `cutoff_nm`.
+    """Per-frame number of CA-CA pairs with mdtraj distance < `cutoff_nm`.
 
-    Previously this materialised the full (n_frames x n_res*(n_res-1)/2)
-    distance matrix just to threshold and sum it: O(F * R^2) time AND memory
-    (9.4 GiB for 500 frames of a 3,172-residue protein). The count only needs
-    a neighbour search, which is O(F * R) with a KD-tree.
+    EXACTLY equal to the original
+        (md.compute_distances(traj, all_ca_pairs) < cutoff_nm).sum(axis=1)
+    but without materialising all n_res*(n_res-1)/2 distances per frame, which
+    was O(F * R^2) time and memory (9.4 GiB for 500 frames of 3,172 residues).
 
-    The KD-tree path is used where it is exactly equivalent to mdtraj's
-    distances: no unit cell, or an orthorhombic one (minimum image). Triclinic
-    cells fall back to the original mdtraj computation, run in memory-bounded
-    chunks of frames so the result is unchanged but no longer unbounded.
+    How exactness is kept:
+      1. A KD-tree (float64) proposes candidate pairs within
+         cutoff + `search_margin_nm`. The margin (1e-3 nm) is orders of
+         magnitude larger than any float32/float64 disagreement (~1e-6 nm even
+         for 30 nm boxes), so every pair mdtraj would count is a candidate.
+      2. Candidates are then measured with md.compute_distances itself - the
+         same float32 code and periodic handling as before - and thresholded
+         with the same strict "<". The KD-tree only decides what to measure,
+         never what counts.
 
-    Frames are independent and the KD-tree work releases the GIL, so the
-    KD-tree path runs on `n_threads` threads (default: up to 8 cores; serial
-    for small inputs). Results are identical to the serial loop.
+    No unit cell, or an orthorhombic one (periodic KD-tree, minimum image), use
+    this path. Triclinic cells use the original all-pairs computation, chunked
+    over frames so memory stays bounded (correct, but not faster).
     """
     n_frames, n_res = len(traj), len(ca_atoms)
     counts = np.zeros(n_frames, dtype=float)
+    ca_atoms = np.asarray(ca_atoms)
     ulen, uang = traj.unitcell_lengths, traj.unitcell_angles
     periodic = ulen is not None
     ortho = periodic and bool(np.allclose(uang, 90.0, atol=1e-3))
 
-    if (not periodic) or ortho:
-        try:
-            from scipy.spatial import cKDTree
-        except ImportError:                       # scipy absent -> chunked path
-            cKDTree = None
-        if cKDTree is not None:
-            xyz = traj.xyz[:, ca_atoms, :]              # float32 view-copy; cast per frame
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        cKDTree = None
 
-            def _one(f):
-                pts = xyz[f].astype(np.float64)
-                if ortho:
-                    box = np.asarray(ulen[f], dtype=np.float64)
-                    pts = np.mod(pts, box)
-                    pts = np.where(pts >= box, 0.0, pts)   # guard mod rounding to L
-                    tree = cKDTree(pts, boxsize=box)
-                else:
-                    tree = cKDTree(pts)
-                # ordered pairs incl. self-matches -> unordered distinct pairs
-                return (tree.count_neighbors(tree, cutoff_nm) - n_res) // 2
+    if cKDTree is not None and ((not periodic) or ortho):
+        r_search = cutoff_nm + search_margin_nm
+        xyz = traj.xyz[:, ca_atoms, :]
 
-            if n_threads is None:
-                import os
-                n_threads = min(8, os.cpu_count() or 1)
-            if n_threads > 1 and n_frames >= 32 and n_res >= 500:
-                from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=n_threads) as ex:
-                    counts[:] = list(ex.map(_one, range(n_frames)))
+        def _candidates(f):
+            pts = xyz[f].astype(np.float64)
+            if ortho:
+                box = np.asarray(ulen[f], dtype=np.float64)
+                pts = np.mod(pts, box)
+                pts = np.where(pts >= box, 0.0, pts)      # mod rounding to exactly L
+                tree = cKDTree(pts, boxsize=box)
             else:
-                for f in range(n_frames):
-                    counts[f] = _one(f)
-            return counts
+                tree = cKDTree(pts)
+            p = tree.query_pairs(r_search, output_type="ndarray").astype(np.int64)
+            return p[:, 0] * n_res + p[:, 1]               # i < j, flat key
 
-    # Fallback: original computation, chunked over frames to bound memory.
+        n_threads = _max_threads() if n_threads is None else max(1, int(n_threads))
+        ex = None
+        if n_threads > 1 and n_frames >= 32 and n_res >= 500:
+            from concurrent.futures import ThreadPoolExecutor
+            ex = ThreadPoolExecutor(max_workers=n_threads)
+        try:
+            for a in range(0, n_frames, chunk):
+                b = min(a + chunk, n_frames)
+                keys = list(ex.map(_candidates, range(a, b))) if ex else \
+                    [_candidates(f) for f in range(a, b)]
+                union = np.unique(np.concatenate(keys)) if keys else np.empty(0, np.int64)
+                if union.size == 0:
+                    continue                                # no pair close in any frame
+                pairs = np.stack([ca_atoms[union // n_res], ca_atoms[union % n_res]], axis=1)
+                d = md.compute_distances(traj[a:b], pairs)  # original arithmetic
+                counts[a:b] = (d < cutoff_nm).sum(axis=1)
+        finally:
+            if ex:
+                ex.shutdown()
+        return counts
+
+    # Triclinic (or no scipy): original computation, chunked over frames.
     ii, jj = np.triu_indices(n_res, k=1)
     pairs = np.stack([ca_atoms[ii], ca_atoms[jj]], axis=1)
-    chunk = max(1, int(max_chunk_bytes // (4 * len(pairs))))
-    for a in range(0, n_frames, chunk):
-        d = md.compute_distances(traj[a:a + chunk], pairs)
-        counts[a:a + chunk] = (d < cutoff_nm).sum(axis=1)
+    step = max(1, int(max_chunk_bytes // (4 * max(1, len(pairs)))))
+    for a in range(0, n_frames, step):
+        d = md.compute_distances(traj[a:a + step], pairs)
+        counts[a:a + step] = (d < cutoff_nm).sum(axis=1)
     return counts
 
 

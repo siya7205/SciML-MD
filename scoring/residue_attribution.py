@@ -95,7 +95,7 @@ def split_ensembles(frame_scores, percentile=85.0):
 # Function: contact_flux
 # -------------------------------------------------------------- #
 def contact_flux(ca_xyz, anom_mask, base_mask, cutoff_nm=0.8, chunk=200,
-                 n_threads=None):
+                 n_threads=None, search_margin_nm=1e-3):
     """Anomaly-conditioned contact flux, streamed to bound memory.
 
     S_contact(r) = sum_j |<C_rj>_anom - <C_rj>_base|
@@ -110,6 +110,12 @@ def contact_flux(ca_xyz, anom_mask, base_mask, cutoff_nm=0.8, chunk=200,
             pipeline's native-contact feature).
         chunk: frames processed per batch; memory is O(chunk * contacts) plus
                two (n_res^2) accumulators.
+        n_threads: threads for the per-frame neighbour search (default: the
+               SCIML_MAX_THREADS cap, else up to 8). Never changes the result.
+        search_margin_nm: the KD-tree proposes pairs within cutoff + margin;
+               each candidate is then kept only if the ORIGINAL float32 norm is
+               < cutoff. The margin only has to exceed float32/float64
+               disagreement (~1e-7 nm), so the result equals the dense version.
 
     Returns:
         (n_res,) contact flux per residue.
@@ -129,8 +135,11 @@ def contact_flux(ca_xyz, anom_mask, base_mask, cutoff_nm=0.8, chunk=200,
     def _frame_flat(f):
         """Flat (i*n_res+j) indices of every contact in frame f, both directions."""
         xyz = ca_xyz[f]
-        pairs = cKDTree(xyz).query_pairs(cutoff_nm, output_type="ndarray")
-        # strict "<" to match the dense definition (query_pairs is "<=")
+        pairs = cKDTree(xyz).query_pairs(cutoff_nm + search_margin_nm,
+                                         output_type="ndarray")
+        # Decide with the same arithmetic as the dense version: norm of the
+        # difference in the input dtype, strict "<". The KD-tree (float64, "<=")
+        # only proposes candidates; it never decides what counts.
         keep = np.linalg.norm(xyz[pairs[:, 0]] - xyz[pairs[:, 1]], axis=1) < cutoff_nm
         pairs = pairs[keep].astype(np.int64)
         return np.concatenate((pairs[:, 0] * n_res + pairs[:, 1],
@@ -140,7 +149,9 @@ def contact_flux(ca_xyz, anom_mask, base_mask, cutoff_nm=0.8, chunk=200,
     # per-frame contact search runs on threads (identical result, any order).
     if n_threads is None:
         import os
-        n_threads = min(8, os.cpu_count() or 1)
+        env = os.environ.get("SCIML_MAX_THREADS", "")
+        n_threads = int(env) if env.isdigit() and int(env) > 0 \
+            else max(1, min(8, os.cpu_count() or 1))
     ex = None
     if n_threads > 1 and n_frames >= 32 and n_res >= 500:
         from concurrent.futures import ThreadPoolExecutor

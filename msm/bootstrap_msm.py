@@ -171,11 +171,15 @@ def _bootstrap_once(i, X, method, block_size, seed, lag_tica, dim_tica,
     so replicates can run in any order or in parallel with identical results.
 
     Returns (pi, P, mfpt) padded to the reference size, None if the replicate
-    has no states, or an Exception instance if it failed.
+    has no states, or an Exception instance if the MSM fit failed.
+
+    Resampling errors (e.g. an unknown bootstrap method in the config) are NOT
+    caught: they are configuration errors and stop the run, exactly as in the
+    original serial loop, instead of degrading into per-replicate warnings.
     """
+    X_boot = bootstrap_resample(X, method=method, block_size=block_size,
+                                seed=seed + i)
     try:
-        X_boot = bootstrap_resample(X, method=method, block_size=block_size,
-                                    seed=seed + i)
         msm_boot, _ = fit_msm_pipeline(X_boot, lag_tica, dim_tica,
                                        n_clusters, lag_msm, seed_kmeans)
         n_boot = msm_boot.n_states
