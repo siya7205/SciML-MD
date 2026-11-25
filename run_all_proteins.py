@@ -154,7 +154,7 @@ def find_protein_dirs(data_dir):
 # -------------------------------------------------------------- #
 # Function: compute_features
 # -------------------------------------------------------------- #
-def compute_features(topology_path, trajectory_path, stride=1):
+def compute_features(topology_path, trajectory_path, stride=1, return_selection=False):
     """
     Step 1 — Extract MD features from a trajectory.
 
@@ -174,8 +174,11 @@ def compute_features(topology_path, trajectory_path, stride=1):
         features_to_matrix,
     )
 
-    feats, traj = _compute_features(str(topology_path), str(trajectory_path), stride=stride)
+    feats, traj, selection = _compute_features(str(topology_path), str(trajectory_path),
+                                               stride=stride, return_selection=True)
     X, _ = features_to_matrix(feats)
+    if return_selection:
+        return X, traj, selection
     return X, traj
 
 
@@ -505,10 +508,16 @@ def _run_pipeline_impl(
     T.start("1 features")
     log.info("[%s] ── Step 1/5: Feature extraction", pdb_id)
     try:
-        X, traj = compute_features(topology_path, trajectory_path, stride=stride)
+        X, traj, selection = compute_features(topology_path, trajectory_path,
+                                              stride=stride, return_selection=True)
     except Exception as exc:
         log.error("[%s] Feature extraction failed: %s", pdb_id, exc)
         return False
+    n_excluded = selection["n_atoms_total"] - selection["n_atoms_analysed"]
+    if n_excluded:
+        log.info("[%s]   Analysing %d protein atoms; excluded %d non-protein atoms (%s)",
+                 pdb_id, selection["n_atoms_analysed"], n_excluded,
+                 ", ".join(f"{k} {v}" for k, v in list(selection["excluded"].items())[:6]))
 
     T.start("1b preflight")
     # --- D-10: discard equilibration frames before anything is scored ---
@@ -545,6 +554,10 @@ def _run_pipeline_impl(
     except Exception as exc:
         log.warning("[%s]   Preflight checks failed: %s", pdb_id, exc)
         pre_info = {"error": str(exc)}
+    if n_excluded or selection["nonstandard_kept"]:
+        # Provenance: recorded only when the selection changed something, so
+        # protein-only inputs keep a byte-identical preflight.json.
+        pre_info["atom_selection"] = selection
     suit = pre_info.get("suitability")
     rec = pre_info.get("recurrence")
 

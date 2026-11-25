@@ -30,6 +30,8 @@ discovery tool.
 ```
 trajectory (.xtc/.dcd) + topology (.pdb)
    │
+   ├─ 0. Atom selection          protein only: water, ions, ligands excluded
+   │
    ├─ 1. Equilibration trim      discard startup relaxation frames
    │
    ├─ 2. DIAGNOSTICS  ◀── run BEFORE any model is fitted
@@ -49,6 +51,19 @@ trajectory (.xtc/.dcd) + topology (.pdb)
 ```
 
 Stages 2 and 8 are what distinguish this pipeline from a standard MSM workflow.
+
+**Stage 0 - atom selection.** Every later stage sees protein atoms only. The
+trajectory is loaded with water, ions, ligands, glycans and other non-protein
+atoms removed; residues that carry a protein backbone (N, CA, C) are kept even
+if non-standard (e.g. MSE). Without this, an all-atom RMSD or radius of
+gyration on an explicit-solvent trajectory measures the water: a 1 ns solvated
+ubiquitin run reported a 37 A "plateau RMSD", and the equilibration trim hit its
+20% cap because water diffusion never plateaus. "All-atom" anywhere in this
+document and in `CLAIMS.md` means all *protein* atoms. Protein-only inputs
+(ATLAS, mdCATH) are unaffected. When atoms are excluded, `preflight.json`
+records what was removed under `atom_selection`. The full atom set is still
+checked against the trajectory before the protein is loaded, so a mismatched
+topology fails loudly instead of loading the wrong atoms.
 Everything else is textbook.
 
 ---

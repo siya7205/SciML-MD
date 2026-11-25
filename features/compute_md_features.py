@@ -14,16 +14,68 @@ Features computed:
 - Radius of gyration
 - Number of native contacts
 - Phi/Psi backbone dihedral angles (sin/cos encoded)
+
+All features - and everything downstream that uses the returned trajectory -
+are computed on PROTEIN atoms only (see select_analysis_atoms). Water, ions,
+ligands and other non-protein atoms are excluded at load time.
 """
+import logging
+from collections import Counter
+
 import numpy as np
 import mdtraj as md
+
+log = logging.getLogger(__name__)
+
+
+# -------------------------------------------------------------- #
+# Function: select_analysis_atoms
+# -------------------------------------------------------------- #
+def select_analysis_atoms(topology):
+    """Atoms the pipeline analyses: the protein, and nothing else.
+
+    Kept: every residue mdtraj recognises as protein, plus any other residue that
+    carries a protein backbone (atoms N, CA and C), so modified amino acids
+    (e.g. selenomethionine, MSE) are not silently dropped.
+    Excluded: water, ions, ligands, glycans, lipids, cofactors.
+
+    Why: with explicit solvent, an all-atom RMSD or radius of gyration measures
+    the water (a 1 ns solvated ubiquitin run gave a 37 A "plateau RMSD", against
+    ~1-2 A for the protein), and equilibration trimming then tracks water
+    diffusion. For protein-only trajectories (e.g. ATLAS) this selects every
+    atom, so their results are unchanged.
+
+    Returns:
+        indices: sorted int array of atom indices to keep.
+        info: dict with n_atoms_total, n_atoms_analysed, excluded (residue name ->
+              atom count) and nonstandard_kept (residue name -> residue count).
+    """
+    keep, excluded, nonstd = [], Counter(), Counter()
+    for res in topology.residues:
+        names = {a.name for a in res.atoms}
+        if res.is_protein:
+            keep.extend(a.index for a in res.atoms)
+        elif {"N", "CA", "C"} <= names:
+            keep.extend(a.index for a in res.atoms)
+            nonstd[res.name] += 1
+        else:
+            excluded[res.name] += res.n_atoms
+    idx = np.array(sorted(keep), dtype=int)
+    info = {
+        "n_atoms_total": int(topology.n_atoms),
+        "n_atoms_analysed": int(idx.size),
+        "excluded": dict(sorted(excluded.items(), key=lambda kv: -kv[1])),
+        "nonstandard_kept": dict(nonstd),
+    }
+    return idx, info
 
 
 
 # -------------------------------------------------------------- #
 # Function: compute_features
 # -------------------------------------------------------------- #
-def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0):
+def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0,
+                     return_selection=False):
     """
     Compute MD features from a trajectory.
     
@@ -32,17 +84,37 @@ def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0
         trajectory_path: Path to trajectory file (XTC, DCD, etc.)
         stride: Load every stride-th frame
         reference_frame: Frame index for RMSD reference
+        return_selection: also return the atom-selection info dict
         
     Returns:
         features: Dictionary of feature arrays
-        traj: MDTraj trajectory object
+        traj: MDTraj trajectory object, PROTEIN ATOMS ONLY
+        selection (only if return_selection): see select_analysis_atoms
     """
     # Load trajectory against the (canonical) topology. Fail fast with a clear,
     # located message if the atom sets disagree — this is exactly where topology
     # drift historically surfaced as the opaque MDTraj error
     # "topology and trajectory files might not contain the same atoms".
+    top_full = md.load_topology(topology_path)
+    keep, selection = select_analysis_atoms(top_full)
+    if keep.size == 0:
+        raise ValueError(
+            f"No protein atoms found in topology '{topology_path}'. SciML-MD analyses "
+            f"protein dynamics; residues present: "
+            f"{', '.join(list(selection['excluded'])[:10])}")
+    subset = keep.size < top_full.n_atoms
     try:
-        traj = md.load(trajectory_path, top=topology_path, stride=stride)
+        if subset:
+            # md.load(..., atom_indices=...) does NOT detect a topology/trajectory
+            # atom-count mismatch - it silently loads garbage. Check the full atom
+            # set against the first frame first; this raises on any mismatch.
+            md.load_frame(trajectory_path, 0, top=topology_path)
+            # Then load only the protein: same coordinates as load-then-slice,
+            # without ever holding the solvent in memory.
+            traj = md.load(trajectory_path, top=topology_path, stride=stride,
+                           atom_indices=keep)
+        else:
+            traj = md.load(trajectory_path, top=topology_path, stride=stride)
     except (ValueError, IOError) as exc:
         raise ValueError(
             f"Topology/trajectory mismatch: could not load '{trajectory_path}' "
@@ -52,12 +124,19 @@ def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0
         ) from exc
 
     # Explicit atom-count assertion (defensive; md.load also enforces equality).
-    top_only = md.load(topology_path)
-    if traj.n_atoms != top_only.n_atoms:
+    expected = keep.size if subset else top_full.n_atoms
+    if traj.n_atoms != expected:
         raise ValueError(
             f"Topology drift detected: trajectory has {traj.n_atoms} atoms but "
-            f"topology '{topology_path}' has {top_only.n_atoms}. These must match."
+            f"topology '{topology_path}' has {expected}. These must match."
         )
+    if subset:
+        excl = ", ".join(f"{k} {v}" for k, v in list(selection["excluded"].items())[:6])
+        log.debug("Analysing %d protein atoms of %d; excluded %d non-protein atoms (%s)",
+                 keep.size, top_full.n_atoms, top_full.n_atoms - keep.size, excl)
+    if selection["nonstandard_kept"]:
+        log.debug("Kept non-standard residues with a protein backbone: %s",
+                 ", ".join(f"{k} x{v}" for k, v in selection["nonstandard_kept"].items()))
 
     n_frames = len(traj)
     
@@ -102,6 +181,8 @@ def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0
         features['psi_sin'] = np.zeros(n_frames)
         features['psi_cos'] = np.zeros(n_frames)
     
+    if return_selection:
+        return features, traj, selection
     return features, traj
 
 

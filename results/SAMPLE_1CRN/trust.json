@@ -2,7 +2,7 @@
   "schema": "sciml-md/trust@1",
   "claims_version": "2026-08-31",
   "system": "SAMPLE_1CRN",
-  "n_frames": 801,
+  "n_frames": 988,
   "verdict": "unsuitable",
   "recurrence_verdict": "unknown",
   "estimability_verdict": "unresolved",
@@ -11,7 +11,7 @@
   "channels": {
     "rarity": {
       "status": "withheld",
-      "reason": "0 ns of sampling is 10000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
+      "reason": "0 ns of sampling is 8000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
       "claims": "W-3 (pi unresolved at <=100 ns); S-3"
     },
     "transition_surprise": {
@@ -49,48 +49,48 @@
       "reasons": [
         "100% of frames lie within 2.0 A of a single medoid - the ensemble is one basin, so MSM microstates will partition noise rather than conformational states",
         "only 1 cluster(s) hold >=5% of frames - the ensemble is close to unimodal, so a multi-state model is unlikely to be identifiable",
-        "max pairwise CA RMSD is only 1.32 A - no resolvable conformational change",
+        "max pairwise CA RMSD is only 1.43 A - no resolvable conformational change",
         "3 disulfide bonds in a 46-residue chain - covalently constrained scaffold, large-scale state switching is unlikely at 300 K"
       ],
-      "n_frames": 801,
+      "n_frames": 988,
       "n_residues": 46,
-      "max_pairwise_ca_rmsd_ang": 1.324,
+      "max_pairwise_ca_rmsd_ang": 1.427,
       "fraction_in_single_basin": 1.0,
       "n_basins": 1,
       "largest_basin_occupancy": 1.0,
       "n_basins_ge_5pct": 1,
-      "n_frames_sampled_for_clustering": 201,
+      "n_frames_sampled_for_clustering": 247,
       "n_disulfides": 3
     },
     "recurrence": {
-      "n_frames_sampled": 401,
+      "n_frames_sampled": 494,
       "atom_selection": "name CA",
       "n_atoms": 46,
       "subsample_step": 2,
       "stride_ns": 0.001,
-      "total_ns": 0.4,
+      "total_ns": 0.5,
       "verdict": "unknown",
-      "reason": "only 401 sampled frames at 0.001 ns; need more than 10002 for a 10.0 ns gap"
+      "reason": "only 494 sampled frames at 0.001 ns; need more than 10002 for a 10.0 ns gap"
     },
     "estimability": {
       "verdict": "unresolved",
-      "total_ns": 0.4,
+      "total_ns": 0.5,
       "pi_convergence_ns": 4000.0,
       "pi_convergence_source": "Kozlowski & Grubmuller, lower bound of a 4000-8000 ns range measured on 50-112 residue proteins",
       "n_residues": 46,
       "threshold_extrapolated": true,
       "threshold_caveat": "chain has 46 residues, outside the 50-112 range the threshold was measured on; larger proteins converge more slowly, so this threshold is if anything too generous",
-      "shortfall_factor": 10000.0,
-      "n_transitions": 791,
+      "shortfall_factor": 8000.0,
+      "n_transitions": 978,
       "n_states_occupied": 20,
       "n_states_revisited": 20,
-      "singleton_mass": 0.019,
+      "singleton_mass": 0.06,
       "singleton_mass_limit": 0.5,
-      "reason": "0 ns of sampling is 10000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)"
+      "reason": "0 ns of sampling is 8000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)"
     }
   },
   "notes": [
-    "rarity withheld: 0 ns of sampling is 10000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
+    "rarity withheld: 0 ns of sampling is 8000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
     "transition_surprise withheld: transition probabilities are fitted to events that never repeat in this trajectory, so 'surprise' cannot separate a rare transition from an unseen one"
   ],
   "display_rules": [
