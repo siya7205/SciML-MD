@@ -1,0 +1,39 @@
+{
+  "equilibration": {
+    "n_frames": 300,
+    "equilibration_frames_discarded": 60,
+    "fraction_discarded": 0.2,
+    "rmsd_initial_ang": 0.0,
+    "rmsd_plateau_ang": 1.1459,
+    "rmsd_plateau_std_ang": 0.047,
+    "detection_capped_at_max_fraction": true
+  },
+  "suitability": {
+    "verdict": "unsuitable",
+    "reasons": [
+      "100% of frames lie within 2.0 A of a single medoid - the ensemble is one basin, so MSM microstates will partition noise rather than conformational states",
+      "only 1 cluster(s) hold >=5% of frames - the ensemble is close to unimodal, so a multi-state model is unlikely to be identifiable",
+      "max pairwise CA RMSD is only 0.72 A - no resolvable conformational change",
+      "only 240 frames - MSM statistics will be thin (see O-11: 100-1000 frames cannot support CK or ITS tests)"
+    ],
+    "n_frames": 240,
+    "n_residues": 76,
+    "max_pairwise_ca_rmsd_ang": 0.718,
+    "fraction_in_single_basin": 1.0,
+    "n_basins": 1,
+    "largest_basin_occupancy": 1.0,
+    "n_basins_ge_5pct": 1,
+    "n_frames_sampled_for_clustering": 240,
+    "n_disulfides": 0
+  },
+  "recurrence": {
+    "n_frames_sampled": 240,
+    "atom_selection": "name CA",
+    "n_atoms": 76,
+    "subsample_step": 1,
+    "stride_ns": 0.0,
+    "total_ns": 0.0,
+    "verdict": "unknown",
+    "reason": "only 240 sampled frames at 0.000 ns; need more than 500002 for a 10.0 ns gap"
+  }
+}

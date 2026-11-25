@@ -1,0 +1,11 @@
+{
+  "n_residues": 36,
+  "n_frames_anomalous": 48,
+  "n_frames_baseline": 272,
+  "percentile": 85.0,
+  "spearman_raw_vs_rmsf": 0.0322,
+  "spearman_final_vs_rmsf": 0.0227,
+  "spearman_contact_vs_rmsf": 0.1095,
+  "spearman_dihedral_vs_rmsf": -0.1122,
+  "orthogonalized": true
+}

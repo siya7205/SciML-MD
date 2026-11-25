@@ -42,3 +42,9 @@ __pycache__/
 !results/SAMPLE_1CRN/**
 !viewer/
 !viewer/**
+
+# Committed test fixtures and golden outputs (small, deliberate exceptions)
+!tests/fixtures/
+!tests/fixtures/**
+!tests/golden/
+!tests/golden/**

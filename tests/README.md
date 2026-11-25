@@ -25,3 +25,19 @@ python tests/run_all_validation.py
 ```bash
 pytest tests/test_signals.py -v
 ```
+
+## Launch regression tests
+
+| File | What it guarantees |
+|---|---|
+| `test_golden_pipeline.py` | The production pipeline on three real MD fixtures (`tests/fixtures/`: no box, orthorhombic, triclinic) reproduces `tests/golden/`. The goldens were checked byte-identical to the validated `d9d2a88` pipeline. |
+| `test_launch_invariants.py` | Invariants with no stored reference: contact counts equal brute-force mdtraj distances (all box types, and pairs at the 8 A cutoff), `contact_flux` equals the original dense code, adding water/ions changes no result, atom-selection rules, mismatched topologies are rejected. |
+
+Numbers are compared at `rtol=1e-6`; strings, verdicts, keys, file sets and
+shapes must match exactly.
+
+**If `test_golden_pipeline.py` fails, an output changed.** If that is a bug, fix
+it. If the change is intended and reviewed, regenerate and commit the goldens
+with the change, saying why in the commit message:
+
+    python tests/golden/update_golden.py
