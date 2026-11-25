@@ -65,18 +65,23 @@ scripts/generate_md_trajectories.py
     ▼
 run_all_proteins.py
     │
+    ├─ Atom selection      (protein only; water, ions, ligands excluded;
+    │                       proteins split by the periodic box re-joined)
+    ├─ Equilibration trim  (discard startup relaxation)
+    ├─ Diagnostics         (basin census, recurrence — before any model is fitted)
     ├─ Feature extraction  (RMSD, Rg, contacts, φ/ψ dihedrals)
-    ├─ tICA                (slow-motion dimensionality reduction)
-    ├─ KMeans clustering   (conformational states)
-    ├─ Markov State Model  (kinetic model)
-    └─ Anomaly scoring     (rarity + transition surprise + local density)
+    ├─ tICA → KMeans → MSM (slow coordinates, microstates, kinetic model)
+    ├─ Channels            (rarity + transition surprise + local density)
+    └─ TRUST CONTRACT      (withholds what this trajectory cannot support)
          │
-         ├─ artifacts/{PDB_ID}/tica_coords.npy
-         ├─ artifacts/{PDB_ID}/dtraj.npy
-         ├─ artifacts/{PDB_ID}/P.npy
-         ├─ artifacts/{PDB_ID}/pi.npy
+         ├─ results/{PDB_ID}/trust.json      ← read this first
+         ├─ results/{PDB_ID}/preflight.json
          ├─ results/{PDB_ID}/frame_scores_dynamic.csv
-         └─ results/{PDB_ID}/residue_scores_dynamic.json
+         ├─ results/{PDB_ID}/residue_scores_*.json
+         └─ artifacts/{PDB_ID}/*.npy
+    ▼
+tools/export_for_viewer.py
+       Saves: viewer/{PDB_ID}.json  (only what may be shown; see HANDOFF.md)
 ```
 
 ---
@@ -166,9 +171,15 @@ python scripts/generate_md_trajectories.py
 
 # 3. Run the full ML pipeline on every protein
 python run_all_proteins.py
+
+# 4. Build the viewer bundles
+python tools/export_for_viewer.py --all
 ```
 
-That's it. Results land in `artifacts/` and `results/`.
+Results land in `results/` and `artifacts/`, viewer bundles in `viewer/`. Start
+with each system's `results/{PDB_ID}/trust.json`: its headline says whether the
+trajectory can support a Markov state model at all. For your own trajectories,
+see [`QUICKSTART.md`](QUICKSTART.md).
 
 ---
 
@@ -304,7 +315,6 @@ python run_all_proteins.py
 
 If you already have an MD trajectory and don't need Steps 1–2, you can run the pipeline directly on your own data.
 
-### Option A — Batch (multiple proteins in `data/`)
 
 Place your data like this:
 
@@ -324,18 +334,12 @@ Then run:
 python run_all_proteins.py
 ```
 
-### Option B — Single trajectory (TAD-FM pipeline)
-
-```bash
-python run_tadfm.py \
-    --top  path/to/topology.pdb \
-    --traj path/to/trajectory.xtc \
-    --out_dir outputs/my_run
-```
-
-**Outputs:**
-- `outputs/my_run/segments.csv` — Segment-level anomaly scores
-- `outputs/my_run/frame_scores.csv` — Per-frame anomaly scores
+If a `canonical_topology.pdb` is present it is used instead of `topology.pdb`.
+The topology must list exactly the atoms of the trajectory, in order; a
+mismatch stops the run with an error. Water, ions, ligands and glycans are
+excluded automatically (only protein atoms are analysed), and a protein cut by
+the periodic box is re-joined automatically, so trajectories do not need to be
+cleaned first.
 
 ---
 
@@ -359,11 +363,20 @@ ensemble-anomaly-maps/
 │   │   └── pi.npy                 Stationary distribution      (n_states,)
 │   └── ...
 │
-└── results/                       ← created by Step 3
-    ├── 1UBQ/
-    │   ├── frame_scores_dynamic.csv      Per-frame anomaly scores [0–100]
-    │   └── residue_scores_dynamic.json   Per-residue anomaly scores
-    └── ...
+├── results/                       ← created by Step 3
+│   ├── 1UBQ/
+│   │   ├── trust.json                    What may be shown, and why the rest is withheld  ← read first
+│   │   ├── preflight.json                Diagnostics behind the verdict (equilibration, basin census,
+│   │   │                                 recurrence; atom-selection / periodic-repair records)
+│   │   ├── frame_scores_dynamic.csv      Per-frame scores [0–100]; withheld channels are NaN
+│   │   ├── residue_scores_dynamic.json   Per-residue scores
+│   │   ├── residue_scores_kinetic.json   RMSF-orthogonal residue attribution
+│   │   ├── residue_scores_rmsf.json      Per-residue flexibility (RMSF)
+│   │   └── residue_attribution_diagnostics.json
+│   └── ...
+│
+└── viewer/                        ← created by tools/export_for_viewer.py
+    └── 1UBQ.json                  The only file a visualiser should read (HANDOFF.md)
 ```
 
 ### frame_scores_dynamic.csv
@@ -481,8 +494,10 @@ Options:
   --n_clusters INT        KMeans clusters (default: 20)
   --lag_msm INT           MSM lag time in frames (default: 10)
   --k_neighbors INT       k for local density signal (default: 10)
-  --window INT            Anomaly score smoothing window (default: 5)
+  --window INT            Moving-median smoothing window (default: 1 = off; smoothing
+                          suppresses single-frame events, use >= 3 only for sustained states)
   --seed INT              Random seed (default: 42)
+  --jobs INT              Proteins processed in parallel (default: 1; results identical)
   --protein PDB_ID        Process only this protein (for debugging)
 ```
 
@@ -507,50 +522,40 @@ python run_all_proteins.py --dim_tica 8 --lag_tica 20
 ## 9. Repository Structure
 
 ```
-ensemble-anomaly-maps/
+SciML-MD/
 │
-├── run_all_proteins.py          ← Batch ML pipeline runner (Step 3)
-├── run_tadfm.py                 ← Single-protein TAD-FM pipeline
+├── run_all_proteins.py          ← The pipeline (Step 3)
+├── batch_runner.py              ← Download → simulate → pipeline, end to end
 │
 ├── scripts/
 │   ├── download_pdb_dataset.py  ← RCSB structure downloader (Step 1)
 │   └── generate_md_trajectories.py  ← OpenMM trajectory generator (Step 2)
 │
 ├── features/
-│   └── compute_md_features.py   ← RMSD, Rg, contacts, φ/ψ dihedrals
-│
-├── segments/
-│   └── segmenter.py             ← Trajectory segmentation algorithms
-│
-├── models/
-│   └── autoencoder.py           ← Numpy autoencoder (no PyTorch needed)
+│   └── compute_md_features.py   ← Atom selection, periodic repair, RMSD, Rg, contacts, φ/ψ
 │
 ├── msm/
-│   ├── bootstrap_msm.py         ← Bootstrap uncertainty quantification
+│   ├── preflight.py             ← Equilibration, basin census, recurrence, estimability
+│   ├── trust.py                 ← The trust contract
+│   ├── bootstrap_msm.py         ← Bootstrap uncertainty (see its warning)
 │   ├── select_lag_and_dim.py    ← VAMP-2 parameter selection
 │   ├── soft_states.py           ← HMM soft state assignments
 │   └── validation.py            ← Chapman-Kolmogorov tests
 │
 ├── scoring/
-│   ├── anomaly_v2.py            ← Multi-signal anomaly fusion
+│   ├── anomaly_v2.py            ← Scoring channels and fusion
+│   ├── residue_attribution.py   ← RMSF-orthogonal residue attribution
 │   └── signals.py               ← RMSF, tICA importance, density
 │
-├── detect/
-│   └── tadfm.py                 ← DBSCAN-based segment anomaly detection
+├── tools/
+│   └── export_for_viewer.py     ← The viewer bundle (Step 4)
 │
-├── analysis/
-│   ├── local_ops.py             ← Per-residue Ramachandran, bonds, SASA
-│   ├── deep_ops.py              ← PyTorch autoencoder (optional)
-│   └── run_*.py                 ← Individual analysis scripts
-│
-├── configs/
-│   └── pipeline.yaml            ← Default hyperparameters
-│
-├── data/                        ← Protein datasets (created at runtime)
-├── artifacts/                   ← Numpy model outputs (created at runtime)
-├── results/                     ← CSV/JSON scores (created at runtime)
-│
-├── requirements.txt             ← All dependencies
+├── tests/                       ← Regression tests (pytest); fixtures/ and golden/
+├── validation/                  ← Validation campaign and VALIDATION_REPORT.md
+├── viewer/                      ← Worked example bundles
+├── configs/pipeline.yaml        ← Default hyperparameters
+├── data/ artifacts/ results/    ← Created at runtime
+└── requirements.txt
 ```
 
 ---
@@ -609,12 +614,6 @@ python run_all_proteins.py --lag_tica 5 --lag_msm 5 --n_clusters 10
 ```bash
 # Step 3 only, for one protein:
 python run_all_proteins.py --protein 1UBQ
-
-# Or run the TAD-FM variant:
-python run_tadfm.py \
-    --top data/1UBQ/topology.pdb \
-    --traj data/1UBQ/traj.xtc \
-    --out_dir outputs/1UBQ_debug
 ```
 
 ### OpenMM is slow on CPU
@@ -631,10 +630,10 @@ python scripts/generate_md_trajectories.py --steps 5000 --report_interval 100
 
 | File | Contents |
 |---|---|
-| [QUICKSTART.md](QUICKSTART.md) | Single-trajectory quickstart (existing data) |
-| [USAGE.md](USAGE.md) | Detailed parameter documentation |
-| [PHASE1.md](PHASE1.md) | VAMP-2 model selection |
-| [PHASE2.md](PHASE2.md) | Energetic and pocket features |
-| [PHASE3.md](PHASE3.md) | Multi-signal scoring |
-| [SCIENTIFIC_DOCUMENTATION.md](SCIENTIFIC_DOCUMENTATION.md) | Full scientific background |
-| [PIPELINE_SUMMARY_FOR_BIOCHEMISTS.md](PIPELINE_SUMMARY_FOR_BIOCHEMISTS.md) | Non-CS overview |
+| [QUICKSTART.md](QUICKSTART.md) | Your own trajectory, from install to viewer bundle |
+| [HANDOFF.md](HANDOFF.md) | Building an interface on the output |
+| [PIPELINE.md](PIPELINE.md) | What every stage computes and what it is evidence of |
+| [CLAIMS.md](CLAIMS.md) | What may and may not be claimed |
+| [INTEGRATION.md](INTEGRATION.md) | Consuming the raw outputs |
+| [validation/VALIDATION_REPORT.md](validation/VALIDATION_REPORT.md) | The evidence |
+| [tests/README.md](tests/README.md) | Regression tests |
