@@ -31,6 +31,7 @@ discovery tool.
 trajectory (.xtc/.dcd) + topology (.pdb)
    │
    ├─ 0. Atom selection          protein only: water, ions, ligands excluded
+   │     └─ periodic repair      re-join a protein the box has cut apart
    │
    ├─ 1. Equilibration trim      discard startup relaxation frames
    │
@@ -64,6 +65,19 @@ document and in `CLAIMS.md` means all *protein* atoms. Protein-only inputs
 records what was removed under `atom_selection`. The full atom set is still
 checked against the trajectory before the protein is loaded, so a mismatched
 topology fails loudly instead of loading the wrong atoms.
+
+**Stage 0 - periodic repair.** Raw MD output (e.g. GROMACS without
+`trjconv -pbc mol`) can cut a protein at the box edge, or leave the chains of a
+complex in different periodic images. Unrepaired, RMSD and superposition are
+meaningless (a split ubiquitin run read a 10.8 A plateau RMSD instead of 1.2 A,
+and its suitability verdict flipped). The pipeline therefore checks every
+trajectory that has a box: a bond that is long as stored but short under the
+minimum-image convention is cut by the box, and molecules are made whole; a
+chain that touches no other chain, but would after a one-box-vector shift, is
+moved back (chains in contact are never moved). Intact trajectories are not
+touched at all. A repair is logged as a warning and recorded in
+`preflight.json` under `pbc_repair`; if a protein cannot be re-joined the run
+stops with an error rather than analysing a broken structure.
 Everything else is textbook.
 
 ---

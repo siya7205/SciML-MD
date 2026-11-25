@@ -72,6 +72,117 @@ def select_analysis_atoms(topology):
 
 
 # -------------------------------------------------------------- #
+# Function: repair_periodic_images
+# -------------------------------------------------------------- #
+def repair_periodic_images(traj, bond_cut_nm=0.5, chunk=256):
+    """Re-join a protein that the periodic box has cut apart. In place.
+
+    Raw MD output (e.g. GROMACS without `trjconv -pbc mol`) wraps each atom into
+    the box separately, so a protein crossing the box edge is cut in two, and
+    chains of a complex can sit in different periodic images. RMSD, radius of
+    gyration, superposition and RMSF are then meaningless: on a split ubiquitin
+    trajectory the plateau RMSD read 10.8 A instead of 1.2 A, and the
+    suitability verdict flipped from unsuitable to marginal.
+
+    Only acts when a problem is detected, so intact trajectories are untouched:
+      1. any bond longer than `bond_cut_nm` as stored but shorter under the
+         minimum-image convention (i.e. cut by the box) -> make molecules whole;
+      2. with several molecules (chains): a chain that touches no already-placed
+         chain (largest first), but would after a one-box-vector shift, is moved
+         there, per frame. Chains in contact are never moved, so an intact
+         complex is untouched however elongated it is.
+    Afterwards no bond may still be cut by the box, or this raises ValueError.
+
+    Returns None if nothing was done, else a dict describing the repair.
+    """
+    if traj.unitcell_vectors is None:
+        return None
+    top = traj.topology
+    bonds = np.array([[a.index, b.index] for a, b in top.bonds], dtype=int)
+    if bonds.size == 0:
+        log.warning("Topology has no bonds: cannot check for molecules split by "
+                    "the periodic box.")
+        return None
+
+    def _cut_frames():
+        """Frames with a bond cut by the box: long as stored (> bond_cut_nm) but
+        short under the minimum-image convention. A bond that is long either way
+        (a residue gap bridged by the topology, an odd CONECT record, a stretched
+        disulfide) is not a periodic-boundary problem and is ignored here."""
+        cut = np.zeros(len(traj), dtype=bool)
+        for a in range(0, len(traj), chunk):
+            x = traj.xyz[a:a + chunk]
+            raw = np.linalg.norm(x[:, bonds[:, 0]] - x[:, bonds[:, 1]], axis=-1)
+            long = raw > bond_cut_nm
+            if long.any():
+                cols = np.where(long.any(axis=0))[0]
+                mi = md.compute_distances(traj[a:a + chunk], bonds[cols], periodic=True)
+                cut[a:a + chunk] = (long[:, cols] & (mi <= bond_cut_nm)).any(axis=1)
+        return cut
+
+    def _place_chains(mols, apply, contact_nm=1.5):
+        """Per frame, put each chain in the periodic image where it touches the
+        chains already placed (largest first). A chain already in contact is
+        never moved; one in contact in no neighbouring image is left alone.
+        Returns the boolean mask of frames where a chain was (or would be) moved."""
+        from scipy.spatial import cKDTree
+        if len(mols) < 2:
+            return np.zeros(len(traj), dtype=bool)
+        order = sorted(range(len(mols)), key=lambda i: -len(mols[i]))
+        idx = [np.array([at.index for at in m]) for m in mols]
+        probe = []
+        for m, ii in zip(mols, idx):
+            ca = np.array([at.index for at in m if at.name == "CA"])
+            probe.append(ca if ca.size else ii)
+        offs = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)])
+        moved = np.zeros(len(traj), dtype=bool)
+        for f in range(len(traj)):
+            B = traj.unitcell_vectors[f].astype(np.float64)
+            group = traj.xyz[f, probe[order[0]]].astype(np.float64)
+            for i in order[1:]:
+                p = traj.xyz[f, probe[i]].astype(np.float64)
+                tree = cKDTree(group)
+                if tree.query(p, distance_upper_bound=contact_nm)[0].min() < contact_nm:
+                    group = np.vstack([group, p]); continue
+                base = -np.round((p.mean(0) - group.mean(0)) @ np.linalg.inv(B))
+                best = None
+                for o in offs + base:
+                    sh = o @ B
+                    d = tree.query(p + sh, distance_upper_bound=contact_nm)[0].min()
+                    if d < contact_nm and (best is None or d < best[0]):
+                        best = (d, sh)
+                if best is not None and np.any(best[1] != 0):
+                    moved[f] = True
+                    if apply:
+                        traj.xyz[f, idx[i]] += best[1].astype(np.float32)
+                    p = p + best[1]
+                group = np.vstack([group, p])
+        return moved
+
+    cut = _cut_frames()
+    mols = [sorted(m, key=lambda at: at.index) for m in top.find_molecules()]
+    if cut.any():
+        traj.make_molecules_whole(inplace=True)
+    sep = _place_chains(mols, apply=False)
+    if not cut.any() and not sep.any():
+        return None
+    if sep.any():
+        _place_chains(mols, apply=True)
+    if _cut_frames().any():
+        raise ValueError(
+            "The protein is split by the periodic box and could not be re-joined "
+            "(bonds still cut at %.1f nm). Make molecules whole before "
+            "analysis, e.g. `gmx trjconv -pbc mol`." % bond_cut_nm)
+    return {
+        "repaired": True,
+        "frames_with_cut_bonds": int(cut.sum()),
+        "frames_with_separated_chains": int(sep.sum()),
+        "n_molecules": len(mols),
+        "n_frames": int(len(traj)),
+    }
+
+
+# -------------------------------------------------------------- #
 # Function: compute_features
 # -------------------------------------------------------------- #
 def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0,
@@ -134,6 +245,10 @@ def compute_features(topology_path, trajectory_path, stride=1, reference_frame=0
         excl = ", ".join(f"{k} {v}" for k, v in list(selection["excluded"].items())[:6])
         log.debug("Analysing %d protein atoms of %d; excluded %d non-protein atoms (%s)",
                  keep.size, top_full.n_atoms, top_full.n_atoms - keep.size, excl)
+    pbc = repair_periodic_images(traj)
+    if pbc:
+        selection["pbc_repair"] = pbc
+        log.debug("Re-joined protein split by the periodic box: %s", pbc)
     if selection["nonstandard_kept"]:
         log.debug("Kept non-standard residues with a protein backbone: %s",
                  ", ".join(f"{k} x{v}" for k, v in selection["nonstandard_kept"].items()))

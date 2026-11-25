@@ -514,6 +514,12 @@ def _run_pipeline_impl(
         log.error("[%s] Feature extraction failed: %s", pdb_id, exc)
         return False
     n_excluded = selection["n_atoms_total"] - selection["n_atoms_analysed"]
+    if selection.get("pbc_repair"):
+        r = selection["pbc_repair"]
+        log.warning("[%s]   Protein was split by the periodic box (%d frame(s) with cut "
+                    "bonds, %d with chains in different images); re-joined before "
+                    "analysis.", pdb_id, r["frames_with_cut_bonds"],
+                    r["frames_with_separated_chains"])
     if n_excluded:
         log.info("[%s]   Analysing %d protein atoms; excluded %d non-protein atoms (%s)",
                  pdb_id, selection["n_atoms_analysed"], n_excluded,
@@ -554,10 +560,13 @@ def _run_pipeline_impl(
     except Exception as exc:
         log.warning("[%s]   Preflight checks failed: %s", pdb_id, exc)
         pre_info = {"error": str(exc)}
+    pbc_repair = selection.pop("pbc_repair", None)
     if n_excluded or selection["nonstandard_kept"]:
         # Provenance: recorded only when the selection changed something, so
         # protein-only inputs keep a byte-identical preflight.json.
         pre_info["atom_selection"] = selection
+    if pbc_repair:
+        pre_info["pbc_repair"] = pbc_repair
     suit = pre_info.get("suitability")
     rec = pre_info.get("recurrence")
 
