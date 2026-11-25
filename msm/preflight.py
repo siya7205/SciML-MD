@@ -26,7 +26,34 @@ audit found the pipeline reporting artifacts as discoveries.
    what happened. A pipeline that cannot say "this system is unsuitable" will
    always return an answer, including when no answer exists.
 """
+import math
+
 import numpy as np
+
+
+# -------------------------------------------------------------- #
+# User-facing number formatting (shared with tools/export_for_viewer.py)
+# -------------------------------------------------------------- #
+def format_ns(x):
+    """A simulated duration in ns, readable at any scale: 99 -> '99',
+    1.5 -> '1.5', 0.5 -> '0.5', 0.04 -> '0.04'. ({:.0f} printed 0.5 ns as '0')."""
+    x = float(x)
+    if x >= 10:
+        return f"{x:.0f}"
+    if x >= 1:
+        return f"{x:.1f}"
+    return f"{x:.2g}" if x > 0 else "0"
+
+
+def format_factor(x):
+    """A shortfall factor such as '41x', rounded half up so every sentence that
+    quotes the same factor prints the same number."""
+    x = float(x)
+    if not math.isfinite(x):
+        return "inf"
+    if x >= 10:
+        return f"{math.floor(x + 0.5):d}"
+    return f"{math.floor(x * 10 + 0.5) / 10:.1f}"
 
 
 # -------------------------------------------------------------- #
@@ -467,7 +494,7 @@ def assess_estimability(dtraj, lag, total_ns=None, n_residues=None,
         ratio = threshold / float(total_ns) if total_ns > 0 else float("inf")
         if float(total_ns) < threshold:
             reasons.append(
-                f"{total_ns:.0f} ns of sampling is {ratio:.0f}x below the "
+                f"{format_ns(total_ns)} ns of sampling is {format_factor(round(ratio, 1))}x below the "
                 f"{threshold:.0f} ns convergence threshold (Kozlowski & "
                 "Grubmuller, lower bound), so the stationary distribution has not "
                 "converged - measured directly in report section 15, where ATLAS "
@@ -495,5 +522,5 @@ def assess_estimability(dtraj, lag, total_ns=None, n_residues=None,
         "singleton_mass_limit": SINGLETON_MASS_LIMIT,
         "reason": ("; ".join(reasons) + " (CLAIMS.md W-3)") if unresolved else
                   (f"{singleton_mass*100:.0f}% singleton mass; {revisited}/{occupied} "
-                   f"states revisited; {total_ns:.0f} ns sampling"),
+                   f"states revisited; {format_ns(total_ns)} ns sampling"),
     }

@@ -23,7 +23,7 @@
     "shortfall_factor": 8000.0,
     "threshold_extrapolated": true,
     "threshold_caveat": "chain has 46 residues, outside the 50-112 range the threshold was measured on; larger proteins converge more slowly, so this threshold is if anything too generous",
-    "caption": "0 ns at 0.001 ns per frame - 8000x below the 4000 ns threshold at which state populations are considered converged."
+    "caption": "0.5 ns at 0.001 ns per frame - 8000x below the 4000 ns threshold at which state populations are considered converged."
   },
   "diagnostics": {
     "basin_census": {
@@ -43,7 +43,7 @@
       "singleton_mass": 0.06,
       "n_states_occupied": 20,
       "n_states_revisited": 20,
-      "reason": "0 ns of sampling is 8000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)"
+      "reason": "0.5 ns of sampling is 8000x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)"
     }
   },
   "frames": {

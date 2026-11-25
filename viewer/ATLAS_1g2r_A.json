@@ -18,7 +18,7 @@
     "shortfall_factor": 40.5,
     "threshold_extrapolated": false,
     "threshold_caveat": null,
-    "caption": "99 ns at 0.2 ns per frame - 40x below the 4000 ns threshold at which state populations are considered converged."
+    "caption": "99 ns at 0.2 ns per frame - 41x below the 4000 ns threshold at which state populations are considered converged."
   },
   "diagnostics": {
     "basin_census": {
