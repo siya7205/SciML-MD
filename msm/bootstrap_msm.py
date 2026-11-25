@@ -9,10 +9,15 @@
 """
 Bootstrap MSM for uncertainty quantification.
 
+EXPERIMENTAL - refuses to run without --i-know-this-is-experimental. Its
+confidence intervals are not valid; see BOOTSTRAP_DEFECTS below. It is not part
+of the governed pipeline (run_all_proteins.py -> tools/export_for_viewer.py).
+
 Builds bootstrap samples of MSMs to compute confidence intervals
 for stationary distributions, transition matrices, and MFPTs.
 """
 import argparse
+import sys
 import json
 import numpy as np
 import pandas as pd
@@ -37,6 +42,33 @@ def load_config(config_path='configs/pipeline.yaml'):
     with open(config_path) as f:
         return yaml.safe_load(f)
 
+
+
+# -------------------------------------------------------------- #
+# Experimental gate
+# -------------------------------------------------------------- #
+EXPERIMENTAL_FLAG = "--i-know-this-is-experimental"
+
+BOOTSTRAP_DEFECTS = """\
+msm/bootstrap_msm.py is EXPERIMENTAL and refuses to run by default. Its
+confidence intervals (pi_ci, P_ci, mfpt_ci) are not valid:
+
+  1. The default resampling ('frames') draws frames independently, destroying
+     time order; an MSM is then fitted to the shuffled sequence, so every
+     replicate models noise, not dynamics.
+  2. KMeans is never seeded (seed_kmeans is accepted but not passed), so runs
+     are not reproducible.
+  3. Each replicate re-clusters, so its state labels are arbitrary; intervals
+     are computed by label number, i.e. across unrelated states.
+  4. A replicate with more states than the reference crashes the padding step.
+
+Even with these fixed, a within-trajectory bootstrap cannot reveal states the
+trajectory never visited, so at the sampling the pipeline is validated for it
+would understate the uncertainty of pi, which CLAIMS.md W-3 says is not
+estimable there and which the trust contract withholds.
+
+Re-run with %s only to work on the method itself; do not
+report its output.""" % EXPERIMENTAL_FLAG
 
 
 # -------------------------------------------------------------- #
@@ -201,7 +233,7 @@ def _bootstrap_once(i, X, method, block_size, seed, lag_tica, dim_tica,
 # Function: bootstrap_msm
 # -------------------------------------------------------------- #
 def bootstrap_msm(features_path, output_dir, config_path=None, 
-                  lag_tica=None, dim_tica=None, n_jobs=1):
+                  lag_tica=None, dim_tica=None, n_jobs=1, allow_experimental=False):
     """
     Perform bootstrap MSM analysis with confidence intervals.
     
@@ -212,7 +244,10 @@ def bootstrap_msm(features_path, output_dir, config_path=None,
         lag_tica: TICA lag (uses config or best from selection if None)
         dim_tica: TICA dim (uses config or best from selection if None)
         n_jobs: parallel bootstrap workers (1 = serial; replicates are independent)
+        allow_experimental: must be True to run at all (see BOOTSTRAP_DEFECTS)
     """
+    if not allow_experimental:
+        raise RuntimeError(BOOTSTRAP_DEFECTS)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -394,10 +429,15 @@ def main():
     parser.add_argument('--n_jobs', type=int, default=1,
                        help='Parallel bootstrap workers (1 = serial; -1 = all cores)')
     
+    parser.add_argument(EXPERIMENTAL_FLAG, dest='experimental', action='store_true',
+                       help='Run despite the known defects (method development only)')
     args = parser.parse_args()
-    
+    if not args.experimental:
+        raise SystemExit(BOOTSTRAP_DEFECTS)
+
     bootstrap_msm(args.features, args.output_dir, args.config,
-                 args.lag_tica, args.dim_tica, n_jobs=args.n_jobs)
+                 args.lag_tica, args.dim_tica, n_jobs=args.n_jobs,
+                 allow_experimental=True)
 
 
 if __name__ == '__main__':
