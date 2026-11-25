@@ -304,7 +304,6 @@ def test_integration():
     print("✓ INTEGRATION TEST PASSED")
     print("="*70)
     
-    return True
 
 
 
@@ -314,8 +313,8 @@ def test_integration():
 def main():
     """Run integration test."""
     try:
-        success = test_integration()
-        return 0 if success else 1
+        test_integration()          # raises on failure
+        return 0
     except Exception as e:
         print(f"\n✗ INTEGRATION TEST FAILED: {e}")
         import traceback
