@@ -644,14 +644,14 @@ def _run_pipeline_impl(
         except Exception:
             pass
 
-    T.start("5 anomaly scoring")
-    log.info("[%s] ── Step 5/5: Anomaly scoring", pdb_id)
+    T.start("5 scoring channels")
+    log.info("[%s] ── Step 5/5: Scoring channels", pdb_id)
     try:
         frame_scores, components = compute_anomaly_signals(
             msm, dtraj, Y, lag_msm=lag_msm, k_neighbors=k_neighbors, window=window
         )
     except Exception as exc:
-        log.error("[%s] Anomaly scoring failed: %s", pdb_id, exc)
+        log.error("[%s] Scoring failed: %s", pdb_id, exc)
         return False
 
     T.start("6 trust contract")
@@ -798,7 +798,8 @@ def run_pipeline(pdb_id, *args, **kwargs):
 # -------------------------------------------------------------- #
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the full ML anomaly-detection pipeline for all proteins in data/",
+        description="Run the SciML-MD pipeline (screening, MSM, scoring channels, trust "
+                    "contract) for every protein in data/",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -837,7 +838,7 @@ def main():
     )
     parser.add_argument(
         "--window", type=int, default=1,
-        help="Moving-median smoothing window for anomaly scores. 1 = OFF (default). "
+        help="Moving-median smoothing window for frame scores. 1 = OFF (default). "
              "Smoothing suppresses isolated rare frames (defect D-09: AUROC 0.84 -> 0.55 "
              "on single-frame anomalies). Use >= 3 only for sustained rare states."
     )
@@ -856,7 +857,7 @@ def main():
     args = parser.parse_args()
 
     log.info("=" * 60)
-    log.info("Batch ML Pipeline — Ensemble Anomaly Maps")
+    log.info("SciML-MD pipeline")
     log.info("=" * 60)
 
     datasets = find_protein_dirs(args.data_dir)

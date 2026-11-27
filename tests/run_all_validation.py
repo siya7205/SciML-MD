@@ -102,7 +102,7 @@ def save_results_markdown(results, output_path):
         "",
         f"**Run date:** {now}  ",
         f"**Python:** {sys.version.splitlines()[0]}  ",
-        f"**Repository:** siya7205/ensemble-anomaly-maps  ",
+        f"**Repository:** SciVizAI/SciML-MD  ",
         "",
         "## Summary",
         "",

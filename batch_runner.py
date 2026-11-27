@@ -7,7 +7,7 @@
 
 #!/usr/bin/env python3
 """
-End-to-end batch runner for ensemble-anomaly-maps.
+End-to-end batch runner for SciML-MD.
 
 This beginner-friendly script automates the full pipeline for multiple PDB targets:
 
@@ -15,7 +15,7 @@ This beginner-friendly script automates the full pipeline for multiple PDB targe
      (default: 9UNN, 9O6O, 1CRN).
   2. Generates short "toy" MD trajectories (.xtc) from each PDB using OpenMM
      so the pipeline can run even when no real trajectories are available.
-  3. Runs the ensemble-anomaly-maps ML pipeline (tICA → clustering ��� MSM →
+  3. Runs the SciML-MD pipeline (tICA → clustering → MSM →
      anomaly scoring) per target in isolated output directories.
   4. Exports results into ASVS-compatible JSON via tools/export_for_asvs.py.
   5. Writes everything under a predictable directory tree::
@@ -489,7 +489,7 @@ def run_pipeline(
     np.save(art_dir / "pi.npy", pi)
 
     # --- Step 5: Anomaly scoring ---
-    log.info("[%s] ── Step 5/5: Anomaly scoring", pdb_id)
+    log.info("[%s] ── Step 5/5: Scoring channels", pdb_id)
     try:
         frame_scores, components = compute_anomaly_signals(
             msm, dtraj, Y,
@@ -498,7 +498,7 @@ def run_pipeline(
             window=window,
         )
     except Exception as exc:
-        log.error("[%s] Anomaly scoring failed: %s", pdb_id, exc)
+        log.error("[%s] Scoring failed: %s", pdb_id, exc)
         return False
 
     # Save frame scores
@@ -720,7 +720,7 @@ def main() -> int:
     exports_dir = Path(args.exports_dir)
 
     log.info("=" * 60)
-    log.info("Batch Runner — Ensemble Anomaly Maps")
+    log.info("SciML-MD batch runner")
     log.info("=" * 60)
     log.info("PDB IDs   : %s", ", ".join(args.pdb_ids))
     log.info("Work dir  : %s", work_dir)

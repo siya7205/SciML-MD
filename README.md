@@ -1,19 +1,26 @@
 
 
-# Ensemble-Anomaly-Maps
+# SciML-MD
 
 **Applicability-domain screening and descriptive analysis for Markov state models of protein trajectories**
 
-Ensemble-Anomaly-Maps is a computational biology pipeline that downloads protein structures from the RCSB PDB, generates short MD trajectories, and applies an unsupervised pipeline (tICA → KMeans → Markov State Model → multi-channel scoring) across an entire dataset of proteins — automatically, in a single command.
+SciML-MD takes a molecular dynamics trajectory and asks, **before fitting
+anything**, whether it can support a Markov state model at all. If it can, it
+builds the model (tICA → KMeans → MSM) and reports descriptive channels plus an
+externally verified per-residue flexibility profile. If it cannot, it says so
+and withholds the quantities that would be meaningless. It runs on one
+trajectory or a whole dataset in a single command, and can also download
+structures and simulate trajectories for you.
 
 > ### ⚠️ Scientific status — read before citing any output
 >
 > This pipeline was originally documented as a **dynamic hotspot detector**.
 > That claim has been **withdrawn**. Four independent experimental designs
 > (validation Phases 3, 5, 6 and 7) agree that at the sampling used here
-> (≤100 ns), the multi-signal score does not detect conformational anomalies
-> better than a four-line `abs(diff)` baseline, and the MSM stationary
-> distribution π does not generalise across replicates of the same protein.
+> (≤100 ns), the multi-signal score is not shown to pick out unusual
+> conformations any better than a four-line `abs(diff)` baseline, and the MSM
+> stationary distribution π does not generalise across replicates of the same
+> protein.
 >
 > **What is supported:** the MSM applicability-domain screen (45% of ATLAS
 > trajectories fail it), the per-residue flexibility profile (externally
@@ -26,8 +33,8 @@ Ensemble-Anomaly-Maps is a computational biology pipeline that downloads protein
 > **[`CLAIMS.md`](CLAIMS.md) is the authoritative list of what this software may
 > and may not be said to do.** Full evidence:
 > [`validation/VALIDATION_REPORT.md`](validation/VALIDATION_REPORT.md).
-> Sections of this README written before 2026-08-30 still contain withdrawn
-> language and are being revised; `CLAIMS.md` overrides them wherever they conflict.
+> This README was revised against `CLAIMS.md` §1–§2 on 2026-11-27; if the two
+> ever disagree, `CLAIMS.md` wins.
 
 ---
 
@@ -36,7 +43,7 @@ Ensemble-Anomaly-Maps is a computational biology pipeline that downloads protein
 1. [What This Pipeline Does](#1-what-this-pipeline-does)
 2. [Prerequisites](#2-prerequisites)
 3. [Installation](#3-installation)
-4. [Quick Start — Full Pipeline in 3 Commands](#4-quick-start--full-pipeline-in-3-commands)
+4. [Quick Start — Full Pipeline in 4 Commands](#4-quick-start--full-pipeline-in-4-commands)
 5. [Step-by-Step Guide](#5-step-by-step-guide)
    - [Step 1 — Download Protein Structures](#step-1--download-protein-structures)
    - [Step 2 — Generate MD Trajectories](#step-2--generate-md-trajectories)
@@ -45,7 +52,8 @@ Ensemble-Anomaly-Maps is a computational biology pipeline that downloads protein
 7. [Output Files Explained](#7-output-files-explained)
 8. [All Command-Line Options](#8-all-command-line-options)
 9. [Repository Structure](#9-repository-structure)
-10. [Troubleshooting](#10-troubleshooting)
+10. [Known Limitations](#10-known-limitations)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -90,7 +98,7 @@ tools/export_for_viewer.py
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Python | ≥ 3.9 | 3.10 or 3.11 recommended |
+| Python | 3.10 or 3.11 | Tested on both; 3.11 recommended (prebuilt wheels for every dependency) |
 | conda | any | Strongly recommended for OpenMM |
 | Git | any | To clone the repo |
 | Internet access | — | For RCSB downloads |
@@ -106,8 +114,8 @@ tools/export_for_viewer.py
 ### 3.1 Clone the repository
 
 ```bash
-git clone https://github.com/siya7205/ensemble-anomaly-maps.git
-cd ensemble-anomaly-maps
+git clone https://github.com/SciVizAI/SciML-MD.git
+cd SciML-MD
 ```
 
 ### 3.2 Create a Python environment
@@ -115,8 +123,8 @@ cd ensemble-anomaly-maps
 **Option A — conda (recommended)**
 
 ```bash
-conda create -n anomaly-maps python=3.11 -y
-conda activate anomaly-maps
+conda create -n sciml python=3.11 -y
+conda activate sciml
 ```
 
 **Option B — venv (if you prefer pip-only)**
@@ -132,7 +140,7 @@ source .venv/bin/activate
 ### 3.3 Install ML and MD dependencies
 
 ```bash
-# Core ML libraries (tICA, MSM, clustering, anomaly scoring)
+# Everything the pipeline and its tests need
 pip install -r requirements.txt
 ```
 
@@ -151,16 +159,15 @@ pip install openmm
 ### 3.5 Verify your installation
 
 ```bash
-python -c "import deeptime; print('deeptime OK')"
-python -c "import mdtraj; print('mdtraj OK')"
+python -m pytest tests -q        # about 15 seconds; expect every test to pass
 python -c "import openmm; print('openmm OK')"   # only if you installed it
 ```
 
 ---
 
-## 4. Quick Start — Full Pipeline in 3 Commands
+## 4. Quick Start — Full Pipeline in 4 Commands
 
-Run these three commands in order from the repository root. Each step builds on the previous one.
+Run these four commands in order from the repository root. Each step builds on the previous one.
 
 ```bash
 # 1. Download ≥50 small proteins from RCSB PDB
@@ -180,6 +187,12 @@ Results land in `results/` and `artifacts/`, viewer bundles in `viewer/`. Start
 with each system's `results/{PDB_ID}/trust.json`: its headline says whether the
 trajectory can support a Markov state model at all. For your own trajectories,
 see [`QUICKSTART.md`](QUICKSTART.md).
+
+> **Expect "cannot support a Markov state model" from this quick start.** Step 2
+> simulates 100 ps per protein by default, and state populations converge only
+> after microseconds. The pipeline is right to withhold the state-dependent
+> channels for such runs; the quick start demonstrates the workflow, not a
+> result. Use long production trajectories (e.g. ATLAS, mdCATH) for analysis.
 
 ---
 
@@ -276,38 +289,39 @@ python run_all_proteins.py
 
 | Sub-step | Library | What happens |
 |---|---|---|
-| Feature extraction | mdtraj | Computes RMSD, Rg, native contacts, φ/ψ dihedrals per frame |
-| tICA | deeptime | Projects features onto slow collective-motion coordinates |
-| KMeans clustering | deeptime | Groups frames into 20 discrete conformational states |
-| MSM | deeptime | Builds a reversible Markov State Model over the states |
-| Anomaly scoring | scoring/anomaly_v2.py | Fuses rarity + transition surprise + local density signals |
+| Atom selection, periodic repair | mdtraj | Keeps protein atoms only; re-joins a protein cut by the periodic box |
+| Feature extraction | mdtraj, scipy | RMSD, Rg, native contacts, φ/ψ dihedrals per frame |
+| Equilibration trim, diagnostics | mdtraj | Discards startup relaxation; basin census and recurrence — before any model is fitted |
+| tICA | deeptime | Projects features onto slow collective coordinates |
+| KMeans clustering | scikit-learn | Groups frames into 20 discrete states (seeded, platform-stable) |
+| MSM | deeptime | Reversible maximum-likelihood Markov state model, active-set pruned |
+| Scoring channels | scoring/ | Rarity, transition surprise and local density (descriptive) |
+| Trust contract | msm/trust.py | Decides what this trajectory can support; withholds the rest |
 
-**What you'll see:**
+**What you'll see** (the 100-frame ubiquitin sample in `sample_data/1UBQ`):
 
 ```
-11:10:00 [INFO] ════════════════════════════════════════════════════
-11:10:00 [INFO] Batch ML Pipeline — Ensemble Anomaly Maps
-11:10:00 [INFO] ════════════════════════════════════════════════════
-11:10:00 [INFO] Found 50 protein dataset(s) to process.
-
-11:10:00 [INFO] ────────────────────────────────────────────────────
-11:10:00 [INFO] [1/50] Processing: 1UBQ
-11:10:00 [INFO] ────────────────────────────────────────────────────
-11:10:00 [INFO] [1UBQ] ── Step 1/5: Feature extraction
-11:10:01 [INFO] [1UBQ]   100 frames × 8 features
-11:10:01 [INFO] [1UBQ] ── Step 2/5: tICA (lag=10, dim=5)
-11:10:01 [INFO] [1UBQ] ── Step 3/5: Clustering (n_clusters=20)
-11:10:02 [INFO] [1UBQ] ── Step 4/5: MSM (lag=10)
-11:10:02 [INFO] [1UBQ] ── Step 5/5: Anomaly scoring
-11:10:02 [INFO] [1UBQ] ✓ Pipeline complete. Mean score: 47.3
-
-...
-
-11:45:00 [INFO] ════════════════════════════════════════════════════
-11:45:00 [INFO] Batch run complete: 49 succeeded, 1 failed.
-11:45:00 [INFO] Artifacts → artifacts/
-11:45:00 [INFO] Results   → results/
+[INFO] SciML-MD pipeline
+[INFO] Found 1 protein dataset(s) to process.
+[INFO] [1/1] Processing: 1UBQ
+[INFO] [1UBQ] ── Step 1/5: Feature extraction
+[WARNING] [1UBQ]   Discarding 7 equilibration frame(s) (7.0%); plateau RMSD 1.63 A
+[WARNING] [1UBQ]   SYSTEM SUITABILITY: UNSUITABLE
+[WARNING] [1UBQ]     - 100% of frames lie within 2.0 A of a single medoid - the ensemble is one basin, ...
+[WARNING] [1UBQ]   RECURRENCE: UNKNOWN - only 93 sampled frames at 1.0 ps; need more than 10002 for a 10.0 ns gap
+[INFO] [1UBQ] ── Step 2/5: tICA (lag=10, dim=5)
+[INFO] [1UBQ] ── Step 3/5: Clustering (n_clusters=20)
+[INFO] [1UBQ] ── Step 4/5: MSM (lag=10)
+[INFO] [1UBQ] ── Step 5/5: Scoring channels
+[WARNING] [1UBQ]   WITHHELD (trust contract): rarity, transition_surprise
+[INFO] [1UBQ]   Trust contract → results/1UBQ/trust.json  (This trajectory cannot support a Markov state model. Scores are not shown.)
+[INFO] [1UBQ] ✓ Pipeline complete.
+[INFO] [1UBQ] Stage timings (total ...):
+[INFO] Batch run complete: 1 succeeded, 0 failed.
 ```
+
+A sample this short is correctly judged unsuitable. Warnings are part of normal
+output: they are the diagnostics explaining the verdict.
 
 ---
 
@@ -348,7 +362,7 @@ cleaned first.
 After a complete run of all three pipeline steps:
 
 ```
-ensemble-anomaly-maps/
+SciML-MD/
 ├── data/                          ← created by Steps 1 & 2
 │   ├── 1UBQ/
 │   │   ├── topology.pdb           (downloaded PDB structure)
@@ -381,10 +395,12 @@ ensemble-anomaly-maps/
 
 ### frame_scores_dynamic.csv
 
+Illustrative values; a withheld channel is an empty (NaN) column:
+
 ```
-frame,score_dynamic,component_rarity,component_transition_surprise,component_local_density
-0,42.3,38.1,45.0,43.9
-1,55.1,60.2,52.3,52.8
+frame,score_dynamic,score_dynamic_smoothed_w5,component_rarity,component_transition_surprise,component_local_density
+0,42.3,44.0,38.1,45.0,43.9
+1,55.1,47.2,60.2,52.3,52.8
 ...
 ```
 
@@ -392,6 +408,7 @@ frame,score_dynamic,component_rarity,component_transition_surprise,component_loc
 |---|---|
 | `frame` | Frame index (0-based) |
 | `score_dynamic` | Fused multi-channel score, range [0, 100]. **Descriptive only** — see CLAIMS.md W-2 |
+| `score_dynamic_smoothed_w5` | Reference 5-frame moving median of the score. Never use it for transient events (smoothing suppresses them) |
 | `component_rarity` | Contribution from state rarity (pi). **Unresolved at <=100 ns** — see CLAIMS.md W-3 |
 | `component_transition_surprise` | Contribution from transition surprise. **Carries no timing information** — see CLAIMS.md W-4 |
 | `component_local_density` | Contribution from local density signal |
@@ -560,7 +577,51 @@ SciML-MD/
 
 ---
 
-## 10. Troubleshooting
+## 10. Known Limitations
+
+What the pipeline does not do, or does only within limits. The scientific
+limits are stated with their evidence in [`CLAIMS.md`](CLAIMS.md).
+
+- **Sampling.** State populations converge only after microseconds (4–8 µs for
+  50–112 residue proteins, Kozlowski & Grubmüller). At ≤100 ns the stationary
+  distribution and every π-derived quantity are withheld (CLAIMS.md W-3), and
+  short trajectories are expected to be judged unsuitable.
+- **Scores are descriptive.** Frame and residue scores describe a trajectory;
+  they are not detections and must not be ranked into "hotspot" lists or
+  thresholded (CLAIMS.md W-1, W-2, W-5).
+- **Protein only.** Water, ions, ligands, glycans and cofactors are excluded
+  before analysis; ligand dynamics are not analysed.
+- **Periodic boundaries.** A protein cut by the box, or a chain in the wrong
+  periodic image, is repaired automatically. This relies on the bonds a PDB
+  topology provides for standard residues, and on chains touching (Cα within
+  1.5 nm) to place them; unusual systems are best made whole beforehand
+  (`gmx trjconv -pbc mol`). A protein that cannot be re-joined stops the run
+  with an error.
+- **Triclinic boxes** (e.g. GROMACS dodecahedra) are handled correctly, but the
+  contact feature then uses an all-pairs computation that is slower for large
+  proteins than the orthorhombic and no-box paths.
+- **Memory.** The whole trajectory (protein atoms only) is held in memory, so
+  memory grows with frames × protein atoms.
+- **Time axis.** The recurrence diagnostic needs the trajectory's time stamps;
+  without them its verdict is `unknown`.
+- **Reproducibility across machines.** Verdicts, the trust contract, state
+  assignments and the transition matrix are identical across platforms; the
+  order of near-tied rank-normalised scores can differ (PIPELINE.md,
+  "Reproducibility across machines"; CLAIMS.md S-4).
+- **No uncertainty estimates.** `msm/bootstrap_msm.py` is disabled: its
+  confidence intervals are not valid (CLAIMS.md W-10).
+
+---
+
+## 11. Troubleshooting
+
+### The verdict says the trajectory "cannot support a Markov state model"
+
+That is the screen working, not a failure. `results/{PDB_ID}/trust.json` and
+`preflight.json` say which diagnostic failed (single basin, no recurrence, too
+little sampling) and why. Short simulations are expected to fail it; see
+Known Limitations above.
+
 
 ### `ModuleNotFoundError: No module named 'deeptime'`
 

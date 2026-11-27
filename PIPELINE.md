@@ -212,10 +212,10 @@ shown without a caveat. (`CLAIMS.md` S-2)
 ## 7. Vocabulary
 
 The word **"anomaly"** must not appear in user-facing copy. It asserts the
-withdrawn claim in a single word. It survives in the repository name
-(`ensemble-anomaly-maps`) and one module path (`scoring/anomaly_v2.py`) because
-renaming those breaks import paths and the public clone URL — a decision about
-project identity rather than a correction.
+withdrawn claim in a single word. The project is named **SciML-MD** (the former
+name, Ensemble-Anomaly-Maps, was retired on 2026-11-27). The word survives only
+where renaming would break consumers: the module path `scoring/anomaly_v2.py`
+and some data field names inside output files.
 
 Replacement vocabulary: *conformational landscape*, *state occupancy*,
 *transition irregularity*. Descriptive nouns, no detection verb.
