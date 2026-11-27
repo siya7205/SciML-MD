@@ -28,6 +28,9 @@ def test_cli_refuses_by_default(tmp_path):
     assert not (tmp_path / "out").exists()
 
 
+# Every replicate fails on this input (documented defect 4), so numpy warns
+# about statistics of an empty sample. Expected; not part of what is tested.
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 def test_override_lets_it_run(tmp_path):
     """With the override the function gets past the gate (it creates its output
     folder only after the gate). It may still fail on the documented defects -
