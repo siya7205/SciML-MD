@@ -248,7 +248,7 @@ def orthogonalise(score, rmsf):
 # -------------------------------------------------------------- #
 def compute_residue_attribution(traj, frame_scores, percentile=85.0,
                                 w_contact=0.5, w_dihedral=0.5,
-                                cutoff_nm=0.8, orthogonalize=True):
+                                cutoff_nm=0.8, orthogonalize=True, ca_traj=None):
     """RMSF-orthogonal per-residue attribution.
 
     Args:
@@ -276,7 +276,8 @@ def compute_residue_attribution(traj, frame_scores, percentile=85.0,
     ca_idx = traj.topology.select("name CA")
     if len(ca_idx) == 0:
         raise ValueError("No CA atoms found")
-    ca_traj = traj.atom_slice(ca_idx).superpose(traj.atom_slice(ca_idx))
+    if ca_traj is None or ca_traj.n_atoms != len(ca_idx):     # else: shared, identical
+        ca_traj = traj.atom_slice(ca_idx).superpose(traj.atom_slice(ca_idx))
     ca_xyz = ca_traj.xyz                                  # nm
 
     # --- channels ---

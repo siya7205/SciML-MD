@@ -345,7 +345,16 @@ def compute_anomaly_signals(msm, dtraj, Y, lag_msm=10, k_neighbors=10, window=1)
 # -------------------------------------------------------------- #
 # Function: compute_residue_scores
 # -------------------------------------------------------------- #
-def compute_residue_scores(traj, frame_scores):
+def _superposed_ca(traj):
+    """CA atoms superposed onto frame 0 - shared by the residue-level steps,
+    which each used to build an identical copy."""
+    ca_idx = traj.topology.select("name CA")
+    if len(ca_idx) == 0:
+        return None
+    return traj.atom_slice(ca_idx).superpose(traj.atom_slice(ca_idx))
+
+
+def compute_residue_scores(traj, frame_scores, ca_traj=None):
     """
     Aggregate per-frame anomaly scores to per-residue scores.
 
@@ -382,8 +391,9 @@ def compute_residue_scores(traj, frame_scores):
             return {}
 
         # RMSF of CA atoms (one per residue, selected via "name CA")
-        ca_traj = traj.atom_slice(ca_idx)
-        ca_traj = ca_traj.superpose(ca_traj)
+        if ca_traj is None or ca_traj.n_atoms != len(ca_idx):
+            ca_traj = traj.atom_slice(ca_idx)
+            ca_traj = ca_traj.superpose(ca_traj)
         mean_xyz = ca_traj.xyz.mean(axis=0)
         # Per-frame per-residue displacement from mean position [T, R]
         disp = np.sqrt(((ca_traj.xyz - mean_xyz) ** 2).sum(axis=-1))
@@ -423,7 +433,7 @@ def compute_residue_scores(traj, frame_scores):
 # -------------------------------------------------------------- #
 # Function: compute_rmsf_residue_json
 # -------------------------------------------------------------- #
-def compute_rmsf_residue_json(traj):
+def compute_rmsf_residue_json(traj, ca_traj=None):
     """
     Per-residue RMSF (Angstroms) keyed like compute_residue_scores.
 
@@ -435,7 +445,8 @@ def compute_rmsf_residue_json(traj):
         ca_idx = traj.topology.select("name CA")
         if len(ca_idx) == 0:
             return {}
-        ca_traj = traj.atom_slice(ca_idx).superpose(traj.atom_slice(ca_idx))
+        if ca_traj is None or ca_traj.n_atoms != len(ca_idx):
+            ca_traj = traj.atom_slice(ca_idx).superpose(traj.atom_slice(ca_idx))
         mean_xyz = ca_traj.xyz.mean(axis=0)
         rmsf_nm = np.sqrt(((ca_traj.xyz - mean_xyz) ** 2).sum(axis=-1).mean(axis=0))
         rmsf_ang = rmsf_nm * 10.0
@@ -700,7 +711,8 @@ def _run_pipeline_impl(
 
     T.start("8 residue scores")
     # --- Save residue scores ---
-    residue_scores = compute_residue_scores(traj, frame_scores)
+    ca_traj = _superposed_ca(traj)
+    residue_scores = compute_residue_scores(traj, frame_scores, ca_traj=ca_traj)
     residue_json = res_dir / "residue_scores_dynamic.json"
     with open(residue_json, "w") as fh:
         json.dump(residue_scores, fh, indent=2)
@@ -711,7 +723,7 @@ def _run_pipeline_impl(
     try:
         from scoring.residue_attribution import compute_residue_attribution
 
-        attr = compute_residue_attribution(traj, frame_scores)
+        attr = compute_residue_attribution(traj, frame_scores, ca_traj=ca_traj)
         keys = list(residue_scores.keys())
         vals = attr["score"]
         if len(keys) == len(vals):
@@ -735,7 +747,7 @@ def _run_pipeline_impl(
 
     # --- Save RMSF residue scores (consumed by tools/export_for_asvs.py) ---
     T.start("11 rmsf")
-    rmsf_scores = compute_rmsf_residue_json(traj)
+    rmsf_scores = compute_rmsf_residue_json(traj, ca_traj=ca_traj)
     if rmsf_scores:
         with open(res_dir / "residue_scores_rmsf.json", "w") as fh:
             json.dump(rmsf_scores, fh, indent=2)

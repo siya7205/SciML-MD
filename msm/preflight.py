@@ -157,12 +157,13 @@ def assess_suitability(traj, rmsd_cluster_cutoff_ang=2.0):
     import mdtraj as md
 
     ca = traj.topology.select("name CA")
-    ct = traj.atom_slice(ca)          # superposed AFTER subsampling (per-frame, exact)
-    n = len(ct)
+    n = len(traj)
     n_res = len(ca)
 
     step = max(1, n // 200)                                 # cap the O(n^2) work
-    sub = ct[::step].superpose(ct)    # same frame-0 reference as before
+    # Subsample frames BEFORE copying atoms (identical values, a fraction of the
+    # copying), then superpose each frame onto frame 0 as before.
+    sub = traj[::step].atom_slice(ca).superpose(traj[:1].atom_slice(ca))
     m = len(sub)
     R = np.zeros((m, m))
     for i in range(m):
@@ -350,8 +351,7 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
     # was ever letting one number answer both. Both are now reported, each
     # labelled with the question it answers.
     sel = traj.topology.select(selection)
-    ct = traj.atom_slice(sel)         # superposed AFTER subsampling (per-frame, exact)
-    n_full = len(ct)
+    n_full = len(traj)
 
     # physical stride, from the trajectory's own clock where available
     stride_ns = None
@@ -361,7 +361,8 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
             stride_ns = dt / 1000.0                      # mdtraj time is in ps
 
     step = max(1, n_full // max_frames)
-    sub = ct[::step].superpose(ct)    # same frame-0 reference as before
+    # subsample before copying atoms; superpose onto frame 0 as before
+    sub = traj[::step].atom_slice(sel).superpose(traj[:1].atom_slice(sel))
     m = len(sub)
     eff_stride = stride_ns * step if stride_ns else None
 
@@ -409,8 +410,7 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
     for alt in (also or ()):
         try:
             asel = traj.topology.select(alt)
-            a_full = traj.atom_slice(asel)
-            at = a_full[::step].superpose(a_full)
+            at = traj[::step].atom_slice(asel).superpose(traj[:1].atom_slice(asel))
             am = len(at)
             if am <= gap + 2:
                 continue
