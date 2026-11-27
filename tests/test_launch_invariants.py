@@ -146,7 +146,7 @@ def test_water_and_ions_do_not_change_results(tmp_path):
     run_fixture(FIXTURES, name, tmp_path / "out_protein")
     run_fixture(tmp_path / "solv", name, tmp_path / "out_solvated")
     errs = compare_outputs(tmp_path / "out_solvated", tmp_path / "out_protein", name,
-                           ignore_keys={"atom_selection"})
+                           ignore_keys={"atom_selection"}, strict=True)   # same machine
     assert not errs, "adding solvent changed results:\n" + "\n".join(errs[:20])
 
 

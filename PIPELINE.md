@@ -238,3 +238,25 @@ surrogate's assumptions fail, not that your alternative is true (Timmer 2000).
 - The applicability screen is a principled gate with a stated criterion, not a
   classifier with a measured error rate. No ground-truth label of
   MSM-suitability exists to validate it against.
+
+---
+
+## Reproducibility across machines
+
+The pipeline is deterministic: the same input on the same machine and library
+versions gives the same output. Across platforms, floating-point rounding in
+the linear algebra differs. Measured on the regression fixtures, macOS ARM
+(numpy 2.4.6, scipy 1.17.1) against Linux x86-64 (numpy 2.2.6, scipy 1.15.3):
+
+| Output | Across platforms |
+|---|---|
+| Verdicts, trust contract, preflight diagnostics | identical |
+| State assignments, transition matrix, stationary distribution | identical |
+| RMSF flexibility profile | identical |
+| tICA coordinates | differ by at most ~5e-6 |
+| Rank-normalised scores (frame scores, residue scores) | near-tied entries can swap: at most 1 frame rank step, 3 kinetic-residue rank steps; ordering otherwise preserved (Spearman 1.000) |
+
+So a verdict, and what the trust contract shows or withholds, does not depend on
+the machine. A score that sits within a rank step of another may appear in the
+opposite order on another machine; do not interpret such near-ties.
+
