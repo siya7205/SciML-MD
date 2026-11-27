@@ -31,9 +31,9 @@
     "atom_selection": "name CA",
     "n_atoms": 36,
     "subsample_step": 1,
-    "stride_ns": 0.0,
-    "total_ns": 0.0,
+    "stride_ns": 2e-05,
+    "total_ns": 0.0064,
     "verdict": "unknown",
-    "reason": "only 320 sampled frames at 0.000 ns; need more than 500002 for a 10.0 ns gap"
+    "reason": "only 320 sampled frames at 0.02 ps; need more than 500002 for a 10.0 ns gap"
   }
 }

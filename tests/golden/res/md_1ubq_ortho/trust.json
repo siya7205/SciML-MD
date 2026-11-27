@@ -1,6 +1,6 @@
 {
   "schema": "sciml-md/trust@1",
-  "claims_version": "2026-08-31",
+  "claims_version": "2026-11-27",
   "system": "md_1ubq_ortho",
   "n_frames": 240,
   "verdict": "unsuitable",
@@ -11,7 +11,7 @@
   "channels": {
     "rarity": {
       "status": "withheld",
-      "reason": "0 ns of sampling is infx below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
+      "reason": "4.8 ps of sampling is 833333x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
       "claims": "W-3 (pi unresolved at <=100 ns); S-3"
     },
     "transition_surprise": {
@@ -67,30 +67,30 @@
       "atom_selection": "name CA",
       "n_atoms": 76,
       "subsample_step": 1,
-      "stride_ns": 0.0,
-      "total_ns": 0.0,
+      "stride_ns": 2e-05,
+      "total_ns": 0.0048,
       "verdict": "unknown",
-      "reason": "only 240 sampled frames at 0.000 ns; need more than 500002 for a 10.0 ns gap"
+      "reason": "only 240 sampled frames at 0.02 ps; need more than 500002 for a 10.0 ns gap"
     },
     "estimability": {
       "verdict": "unresolved",
-      "total_ns": null,
+      "total_ns": 0.0048,
       "pi_convergence_ns": 4000.0,
       "pi_convergence_source": "Kozlowski & Grubmuller, lower bound of a 4000-8000 ns range measured on 50-112 residue proteins",
       "n_residues": 76,
       "threshold_extrapolated": false,
       "threshold_caveat": null,
-      "shortfall_factor": Infinity,
+      "shortfall_factor": 833333.3,
       "n_transitions": 230,
       "n_states_occupied": 20,
       "n_states_revisited": 20,
       "singleton_mass": 0.043,
       "singleton_mass_limit": 0.5,
-      "reason": "0 ns of sampling is infx below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)"
+      "reason": "4.8 ps of sampling is 833333x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)"
     }
   },
   "notes": [
-    "rarity withheld: 0 ns of sampling is infx below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
+    "rarity withheld: 4.8 ps of sampling is 833333x below the 4000 ns convergence threshold (Kozlowski & Grubmuller, lower bound), so the stationary distribution has not converged - measured directly in report section 15, where ATLAS replicates anti-occupy each other's states (CLAIMS.md W-3)",
     "transition_surprise withheld: transition probabilities are fitted to events that never repeat in this trajectory, so 'surprise' cannot separate a rare transition from an unseen one"
   ],
   "display_rules": [

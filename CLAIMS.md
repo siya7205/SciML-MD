@@ -1,6 +1,9 @@
 # CLAIMS.md — what SciML-MD is allowed to say
 
-**Status: settled 2026-08-30 (OI-31), revised 2026-08-31 after Phase 8 (§18).**
+**Status: settled 2026-08-30 (OI-31), revised 2026-08-31 after Phase 8 (§18),
+revised 2026-11-27 (S-4 scoped to one platform; W-10 bootstrap intervals).**
+`CLAIMS_VERSION` in `msm/trust.py` is the date of the last revision; every
+`trust.json` and viewer bundle records the version it was produced under.
 **This file is the single source of truth.**
 If a claim is not listed here as `SUPPORTED`, no README, paper, slide, UI string,
 docstring, or demo may assert it. Adding a claim means adding a row here first,
@@ -139,8 +142,20 @@ and unlike an ITS plot it gives a single number a non-specialist can read.
 
 ### S-4 · Determinism and reproducibility
 
-Same input + same seed → identical states, scores, and figures. 28 tests,
-`tests/test_production_scoring.py`.
+**On one platform** (same machine and library versions): same input + same seed
+→ identical states, scores, and figures. 28 tests,
+`tests/test_production_scoring.py`; end to end, `tests/test_golden_pipeline.py`
+with `SCIML_GOLDEN_STRICT=1`.
+
+**Across platforms** the claim is narrower, and measured: macOS ARM against
+Linux x86-64 on the regression fixtures gave identical verdicts, trust
+contract, preflight diagnostics, state assignments, transition matrix and RMSF;
+tICA coordinates differed by ≤ 5.2e-6; rank-normalised scores swapped
+near-tied entries (≤ 1 frame rank step, ≤ 3 kinetic-residue rank steps,
+Spearman 1.000). So: *a verdict and what the trust contract shows do not depend
+on the machine; the order of near-tied scores can.* Do not claim bit-identical
+scores across machines. Evidence: `PIPELINE.md` "Reproducibility across
+machines"; `tests/test_compare_sensitivity.py`.
 
 ### S-5 · tICA as a representation — never tested, never in doubt
 
@@ -180,6 +195,7 @@ these methods yields the scientific conclusions in §2.
 | **W-7** | "Fusion provides comprehensive detection" | `PIPELINE_OVERVIEW.md:767` | Fusion was never compared against its own components on a task with a ground truth that the components failed. Untested. |
 | **W-8** | Cryptic pocket discovery framing | `PIPELINE_OVERVIEW.md:788–800` | Cites the pocket-detection literature next to our output without ever running a pocket comparison. Guilt by adjacency. |
 | **W-9** | "early warning" of conformational change | slides / demo copy | Phase 6, p = 0.487 (§14). |
+| **W-10** | Bootstrap confidence intervals for π, P and MFPT (`pi_ci.parquet`, `P_ci.npz`, `mfpt_ci.parquet`) | `PIPELINE_OVERVIEW.md` ("Bootstrap MSM"), `msm/bootstrap_msm.py` | Not valid as implemented: the default resampling shuffles frames (destroying the time order an MSM is estimated from), KMeans is unseeded, intervals are taken across arbitrary per-replicate state labels, and replicates with more states than the reference crash. Beyond the bugs, a within-trajectory bootstrap cannot reveal unvisited states, so it would understate exactly the uncertainty W-3 describes. The tool refuses to run without `--i-know-this-is-experimental`. A valid uncertainty estimate needs a new method, not a fix (open). |
 
 **W-3 has a code consequence, not only a copy consequence** — see OI-34: every
 π-derived quantity (`pi.npy`, `component_rarity`, anything reading

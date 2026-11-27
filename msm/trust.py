@@ -29,7 +29,7 @@ from measurements taken before the model was fitted.
 """
 from __future__ import annotations
 
-CLAIMS_VERSION = "2026-08-31"
+CLAIMS_VERSION = "2026-11-27"
 
 OK = "ok"
 DESCRIPTIVE = "descriptive_only"

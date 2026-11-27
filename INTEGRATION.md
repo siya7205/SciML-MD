@@ -41,7 +41,7 @@ refuses to run without an override flag.
 ```jsonc
 {
   "schema": "sciml-md/trust@1",
-  "claims_version": "2026-08-31",
+  "claims_version": "2026-11-27",
   "system": "1g2r_A",
   "verdict": "suitable",              // suitable | marginal | unsuitable | unknown
   "recurrence_verdict": "recurrent",  // recurrent | weak | non_recurrent | unknown

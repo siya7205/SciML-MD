@@ -45,6 +45,23 @@ def format_ns(x):
     return f"{x:.2g}" if x > 0 else "0"
 
 
+def format_duration(ns):
+    """A duration with a unit that suits its size: 99 -> '99 ns', 0.5 -> '0.5 ns',
+    0.008 -> '8 ps', 2e-5 -> '0.02 ps'. Durations >= 0.1 ns print exactly as
+    format_ns + ' ns' always did."""
+    ns = float(ns)
+    if ns >= 0.1 or ns <= 0:
+        return f"{format_ns(ns)} ns"
+    return f"{format_ns(ns * 1000.0)} ps"
+
+
+def sig(x, n=4):
+    """Round to n significant figures. Times are stored this way, not to fixed
+    decimals, so a short run's stride or length never rounds to 0."""
+    x = float(x)
+    return float(f"{x:.{n}g}") if x else 0.0
+
+
 def format_factor(x):
     """A shortfall factor such as '41x', rounded half up so every sentence that
     quotes the same factor prints the same number."""
@@ -352,8 +369,8 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
            "atom_selection": selection,
            "n_atoms": int(len(sel)),
            "subsample_step": int(step),
-           "stride_ns": round(eff_stride, 4) if eff_stride else None,
-           "total_ns": round(n_full * stride_ns, 1) if stride_ns else None}
+           "stride_ns": sig(eff_stride) if eff_stride else None,
+           "total_ns": sig(n_full * stride_ns) if stride_ns else None}
 
     if eff_stride is None:
         return {**out, "verdict": "unknown",
@@ -364,7 +381,7 @@ def assess_recurrence(traj, min_gap_ns=10.0, max_frames=400, selection="name CA"
     gap = max(1, int(round(min_gap_ns / eff_stride)))
     if m <= gap + 2:
         return {**out, "verdict": "unknown",
-                "reason": (f"only {m} sampled frames at {eff_stride:.3f} ns; "
+                "reason": (f"only {m} sampled frames at {format_duration(eff_stride)}; "
                            f"need more than {gap + 2} for a {min_gap_ns} ns gap")}
 
     R = np.zeros((m, m))
@@ -494,15 +511,15 @@ def assess_estimability(dtraj, lag, total_ns=None, n_residues=None,
         ratio = threshold / float(total_ns) if total_ns > 0 else float("inf")
         if float(total_ns) < threshold:
             reasons.append(
-                f"{format_ns(total_ns)} ns of sampling is {format_factor(round(ratio, 1))}x below the "
-                f"{threshold:.0f} ns convergence threshold (Kozlowski & "
+                f"{format_duration(total_ns)} of sampling is {format_factor(round(ratio, 1))}x below the "
+                f"{format_duration(threshold)} convergence threshold (Kozlowski & "
                 "Grubmuller, lower bound), so the stationary distribution has not "
                 "converged - measured directly in report section 15, where ATLAS "
                 "replicates anti-occupy each other's states")
     unresolved = bool(reasons)
     return {
         "verdict": "unresolved" if unresolved else "estimable",
-        "total_ns": round(float(total_ns), 1) if total_ns else None,
+        "total_ns": sig(total_ns) if total_ns else None,
         "pi_convergence_ns": threshold,
         "pi_convergence_source": ("Kozlowski & Grubmuller, lower bound of a "
                                   f"4000-8000 ns range measured on {lo}-{hi} "
@@ -522,5 +539,5 @@ def assess_estimability(dtraj, lag, total_ns=None, n_residues=None,
         "singleton_mass_limit": SINGLETON_MASS_LIMIT,
         "reason": ("; ".join(reasons) + " (CLAIMS.md W-3)") if unresolved else
                   (f"{singleton_mass*100:.0f}% singleton mass; {revisited}/{occupied} "
-                   f"states revisited; {format_ns(total_ns)} ns sampling"),
+                   f"states revisited; {format_duration(total_ns)} sampling"),
     }

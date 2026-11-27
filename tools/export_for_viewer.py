@@ -182,11 +182,11 @@ def _sampling_caption(rec, est):
     short = est.get("shortfall_factor")
     if ns is None:
         return "Sampling length unknown."
-    from msm.preflight import format_factor, format_ns
-    base = f"{format_ns(ns)} ns at {stride:g} ns per frame"
+    from msm.preflight import format_duration, format_factor
+    base = f"{format_duration(ns)} at {format_duration(stride)} per frame"
     if short:
         return (f"{base} - {format_factor(short)}x below the "
-                f"{format_ns(est.get('pi_convergence_ns', 0))} ns threshold at which "
+                f"{format_duration(est.get('pi_convergence_ns', 0))} threshold at which "
                 "state populations are considered converged.")
     return base + "."
 

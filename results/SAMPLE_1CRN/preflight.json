@@ -32,9 +32,9 @@
     "n_atoms": 46,
     "subsample_step": 2,
     "stride_ns": 0.001,
-    "total_ns": 0.5,
+    "total_ns": 0.494,
     "verdict": "unknown",
-    "reason": "only 494 sampled frames at 0.001 ns; need more than 10002 for a 10.0 ns gap"
+    "reason": "only 494 sampled frames at 1.0 ps; need more than 10002 for a 10.0 ns gap"
   },
   "atom_selection": {
     "n_atoms_total": 13398,
